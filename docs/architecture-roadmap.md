@@ -8,9 +8,11 @@
 | --- | --- | --- |
 | Phase 0 Core 解耦 | ✅ 完成 | 拆出 `sharpRPA.Core`（`net10.0`，无平台依赖）与 `sharpRPA.Windows`；命令改为 `IScriptExecutionContext`，`ScriptRunner` 支持无头执行、取消、暂停、进度、清理回调 |
 | 录制事件边界 | ✅ 完成 | `RecordedAction` / `IRecordingSink` / `InMemoryRecordingSink`，浏览器与桌面录制共用 |
-| 可测试性 | ✅ 完成 | `sharpRPA.Tests` 59 个用例，跨平台运行（含真实 sample 脚本往返、MCP 进程级集成测试） |
-| Phase 1 MCP | ✅ 完成 | `sharpRPA.Mcp` stdio server，9 个工具，跨平台腿 + Windows 全命令腿 |
-| Phase 2 自动录制 | ⬜ 未开始 | 浏览器 Playwright recorder、Windows UIA 录制 |
+| 可测试性 | ✅ 完成 | `sharpRPA.Tests` 84 个用例，跨平台运行（含真实 sample 脚本往返、录制崩溃恢复、目标索引、MCP 进程级集成测试） |
+| Phase 1 MCP | ✅ 完成 | `sharpRPA.Mcp` stdio server，17 个工具，跨平台腿 + Windows 全命令腿 |
+| 录制存储 | ✅ 完成 | 暂存 JSONL → `record_stop` 时 gzip 入 SQLite；启动时孤儿文件回收（缺行导入为 `incomplete`，多余文件删除） |
+| 目标索引 | ✅ 完成 | `target_index` 由脚本与录制派生，`find_targets` / `rebuild_target_index`，只读可重建 |
+| Phase 2 事件采集 | ⬜ 未开始 | 浏览器 Playwright 注入录制、Windows UIA/钩子录制（存储与生命周期已就绪） |
 | Phase 3 Avalonia | ⬜ 未开始 | 视产品需要 |
 
 ## 1. 结论
@@ -178,26 +180,38 @@ MCP 是优先级最高的改造。官方 C# SDK `ModelContextProtocol` 当前为
 - 将 Windows 专属命令注册到平台后端。
 - 提供 `CommandCatalog` 和 JSON Schema。
 
-建议工具：
+已实现工具：
 
 ```text
+# 脚本
 list_scripts
 get_script
 validate_script
-create_script
-update_script
+
+# 命令
 list_commands
 describe_command
+
+# 执行
 run_script
 get_run_status
-cancel_run
 get_run_log
-get_artifact
+cancel_run
+
+# 录制
 record_start
+record_event
 record_stop
+record_abort
+list_recordings
 get_recording
-generate_script_from_recording
+
+# 目标索引
+find_targets
+rebuild_target_index
 ```
+
+计划中的工具：`create_script`、`update_script`、`get_artifact`、`generate_script_from_recording`。
 
 Agent 工作流：
 
@@ -205,8 +219,8 @@ Agent 工作流：
 2. 轮询 `get_run_status` 和 `get_run_log`。
 3. 失败时读取截图、Playwright trace、UIA 元素信息。
 4. 修改脚本并重新运行。
-5. 新流程通过 `record_start`、人工演示、`record_stop` 生成脚本。
-6. Agent 对录制结果做参数化、等待和选择器优化。
+5. 新流程通过 `record_start`、`record_event`（或未来的采集钩子）、`record_stop` 落库。
+6. 用 `find_targets` 定位"哪个脚本在哪里点了这个按钮"，再对录制结果做参数化、等待和选择器优化。
 
 安全边界：
 
@@ -234,6 +248,57 @@ Agent 工作流：
 - 映射到 `ActivateWindowCommand`、`ThickAppClickItemCommand`、`SendKeysCommand` 等。
 - 原始坐标只能作为兜底，不作为主策略。
 
+### 存储设计（已实现）
+
+录制采用"流式暂存 → 事务提交"，而不是边录边写库：
+
+```text
+record_start   → 分配 id，创建 recording-staging/<id>.jsonl（首行写 header）
+record_event   → 追加一行 JSONL（不碰数据库）
+record_stop    → flush + fsync → 关闭句柄 → gzip → INSERT recording → 刷新目标索引 → 删除暂存文件
+record_abort   → 关闭句柄 → 删除暂存文件（数据库零写入）
+```
+
+为什么临时文件而不是直接写 SQLite：录制是长度未知的高频追加流，直接插入会变成成千上万个小事务；而且半截录制对回放没有价值。落盘既不占内存，进程崩溃后也留得下现场。
+
+崩溃窗口与启动回收（`CollectStaging`）：
+
+| 状态 | 处理 |
+| --- | --- |
+| 有暂存文件、无库行 | 崩在提交前 → 按 `incomplete` 导入（header + 可解析事件） |
+| 有库行、残留暂存文件 | 崩在删除前 → 直接删文件，不重复入库 |
+| 文件太新（默认 < 1 小时） | 视为活跃/刚写入，跳过 |
+| 属于本进程活跃会话 | 跳过 |
+
+事件以 gzip BLOB 存在 `recording.events`：回放永远是整段按序读取，行存 10 万条约 20MB、gzip JSONL 约 1–2MB，而且 blob 以后随时可重建成事件表，反过来不行。
+
+### 操作对象索引（已实现）
+
+**不建权威对象库**，只建可重建的派生索引 `target_index`：
+
+- 权威库要求 46 个命令把内联选择器改成外键 → 全量 XML 迁移 + 旧脚本兼容层；选择器还缺少作用域（应用→窗口→元素），最终会变成不可验证的脏行；而且目前没有消费者。
+- 派生索引只读、可全量重建，`rebuild_target_index` 随时重跑，索引错了删表即可。
+
+```sql
+CREATE TABLE target_index (
+  kind TEXT,          -- file | url | window | ui_element
+  locator TEXT,
+  locator_kind TEXT,  -- path | url | window_title | xpath | selector | automation_id | name | recorded
+  app_hint TEXT,      -- 作用域提示：窗口名 / 进程 / 页面 URL
+  source_kind TEXT,   -- script | recording
+  source_id TEXT,     -- 脚本路径 或 recording id
+  seq INTEGER         -- 脚本行号 或 事件序号
+);
+```
+
+提取规则（`TargetIndexBuilder`）：
+
+- 脚本侧按属性名/取值分类：`*Path`→file，`http(s)://`→url，`*Window*`→window，`*Search*/*Selector*/*XPath*/*AutomationID*/*Handle*`→ui_element；`*Type/*Action/*Mode` 视为命令元数据而非定位器，排除。
+- 录制侧优先读 `RecordedAction.Metadata`（`kind`/`selector`/`selectorKind`/`window`/`process`/`pageUrl`），缺失时按 `Target` 取值兜底。
+- 文件、图片都按"被引用的路径"处理，不建文件主档；运行时截图属于 artifact，不是主数据。
+
+升级为权威对象库的触发条件（升级时保留内联选择器作为兜底，旧脚本零迁移）：录制回放的选择器命中率成为主要痛点、出现 10+ 脚本复用同一元素、或需要 UI 改版自愈。
+
 ### 主要风险
 
 - 选择器不稳定，需要多级定位、等待和重试。
@@ -243,18 +308,19 @@ Agent 工作流：
 
 ## 7. 实施路线
 
-| 阶段 | 内容 | 估算 | 交付物 |
-| --- | --- | --- | --- |
-| Phase 0 | Core 解耦、ScriptRunner、ExecutionContext、CommandCatalog | 1～2 周 | 无头运行库 |
-| Phase 1 | stdio MCP Server、脚本运行/校验/日志工具 | 1～2 周 | opencode 可用 MCP |
-| Phase 2 | 浏览器 + Windows 桌面录制 MVP | 3～6 周 | 录制生成 XML 并回放 |
-| Phase 3 | Avalonia UI 重写 | 2～3 个月 | 新桌面客户端 |
-| Phase 4 | 跨平台自动化后端 | 3～6 个月 | macOS/Linux 能力 |
+| 阶段 | 内容 | 估算 | 状态 | 交付物 |
+| --- | --- | --- | --- | --- |
+| Phase 0 | Core 解耦、ScriptRunner、ExecutionContext、CommandCatalog | 1～2 周 | ✅ | 无头运行库 |
+| Phase 1 | stdio MCP Server、脚本运行/校验/日志工具 | 1～2 周 | ✅ | opencode 可用 MCP |
+| Phase 1.5 | 录制暂存 → SQLite、目标索引、MCP 录制/检索工具 | 1～2 天 | ✅ | 可查询的录制档案与 `find_targets` |
+| Phase 2 | 浏览器 + Windows 桌面事件采集，录制生成 XML 并回放 | 3～6 周 | ⬜ | 录制生成脚本并回放 |
+| Phase 3 | Avalonia UI 重写 | 2～3 个月 | ⬜ | 新桌面客户端 |
+| Phase 4 | 跨平台自动化后端 | 3～6 个月 | ⬜ | macOS/Linux 能力 |
 
 推荐顺序：
 
-1. 先做 Phase 0 + Phase 1，保持 WinForms UI 不变，快速获得 Agent 集成能力。
-2. 再做 Phase 2，优先浏览器和 Windows 桌面的点击/输入/窗口切换。
+1. Phase 0 + Phase 1 + Phase 1.5 已完成，WinForms UI 保持不变，Agent 集成能力已可用。
+2. 下一步做 Phase 2，优先浏览器和 Windows 桌面的点击/输入/窗口切换；存储与索引无需返工。
 3. 只有明确需要跨平台 UI 时再做 Phase 3。
 4. 跨平台 RPA 后端最后做，不作为近期目标。
 

@@ -102,6 +102,14 @@ namespace sharpRPA.Core
             return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) + "\\sharpRPA\\";
         }
         /// <summary>
+        /// Returns the workspace folder used for the SQLite database and recording staging files.
+        /// Unlike <see cref="GetAppFolderPath"/> this is built with Path.Combine so it is valid on every OS.
+        /// </summary>
+        public static string GetWorkspaceFolderPath()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "sharpRPA");
+        }
+        /// <summary>
         /// Returns commands from the AutomationCommands.cs file grouped by Custom 'Group' attribute.
         /// </summary>
         public static List<IGrouping<Attribute, Type>> GetGroupedCommands()

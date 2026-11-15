@@ -44,6 +44,7 @@ namespace sharpRPA.Tests
                 CreateNoWindow = true
             };
             startInfo.Environment["SHARPRPA_SCRIPT_DIR"] = scriptFolder.Directory;
+            startInfo.Environment["SHARPRPA_DB"] = Path.Combine(scriptFolder.Directory, "sharprpa-mcp.db");
 
             process = Process.Start(startInfo);
             Assert.NotNull(process);
@@ -108,11 +109,19 @@ namespace sharpRPA.Tests
                 {
                     "cancel_run",
                     "describe_command",
+                    "find_targets",
+                    "get_recording",
                     "get_run_log",
                     "get_run_status",
                     "get_script",
                     "list_commands",
+                    "list_recordings",
                     "list_scripts",
+                    "rebuild_target_index",
+                    "record_abort",
+                    "record_event",
+                    "record_start",
+                    "record_stop",
                     "run_script",
                     "validate_script"
                 },
@@ -186,6 +195,80 @@ namespace sharpRPA.Tests
 
             var logResult = await CallAsync("get_run_log", new { runId, maxLines = 50 });
             Assert.Contains("Running Line", ResultText(logResult));
+        }
+
+        [Fact]
+        public async Task RecordLifecycle_CommitsToSqliteAndIndexesTargets()
+        {
+            var started = await CallAsync("record_start", new { source = "browser", title = "mcp capture" });
+            var recordingId = JsonDocument.Parse(ResultText(started)).RootElement.GetProperty("id").GetString();
+            Assert.False(string.IsNullOrEmpty(recordingId));
+
+            var firstEvent = await CallAsync("record_event", new
+            {
+                recordingId,
+                actionType = "click",
+                target = "//button[@id='save']",
+                metadata = new Dictionary<string, string>
+                {
+                    ["kind"] = "ui_element",
+                    ["selectorKind"] = "xpath",
+                    ["pageUrl"] = "https://example.com/checkout"
+                }
+            });
+            Assert.Contains("\"actionCount\":1", ResultText(firstEvent));
+
+            await CallAsync("record_event", new
+            {
+                recordingId,
+                actionType = "navigate",
+                target = "https://example.com/checkout"
+            });
+
+            var stopped = await CallAsync("record_stop", new { recordingId, title = "mcp capture" });
+            var stoppedText = ResultText(stopped);
+            Assert.Contains("\"status\":\"completed\"", stoppedText);
+            Assert.Contains("\"actionCount\":2", stoppedText);
+            Assert.Contains("\"title\":\"mcp capture\"", stoppedText);
+
+            var listed = await CallAsync("list_recordings", new { });
+            Assert.Contains(recordingId, ResultText(listed));
+
+            var detail = await CallAsync("get_recording", new { recordingId });
+            using (var detailDocument = JsonDocument.Parse(ResultText(detail)))
+            {
+                var root = detailDocument.RootElement;
+                Assert.Equal("completed", root.GetProperty("status").GetString());
+                Assert.Equal(2, root.GetProperty("events").GetArrayLength());
+                Assert.Equal("//button[@id='save']", root.GetProperty("events")[0].GetProperty("target").GetString());
+                Assert.Equal("https://example.com/checkout", root.GetProperty("events")[1].GetProperty("target").GetString());
+            }
+
+            var targets = await CallAsync("find_targets", new { query = "save" });
+            var targetText = ResultText(targets);
+            Assert.Contains("ui_element", targetText);
+            Assert.Contains("xpath", targetText);
+
+            var rebuild = await CallAsync("rebuild_target_index", new { });
+            Assert.Contains("indexed", ResultText(rebuild));
+        }
+
+        [Fact]
+        public async Task RecordAbort_WritesNothing()
+        {
+            var started = await CallAsync("record_start", new { source = "windows-desktop" });
+            var recordingId = JsonDocument.Parse(ResultText(started)).RootElement.GetProperty("id").GetString();
+
+            await CallAsync("record_event", new { recordingId, actionType = "click", target = "OK" });
+
+            var aborted = await CallAsync("record_abort", new { recordingId });
+            Assert.Contains("\"cancelled\":true", ResultText(aborted));
+
+            var listed = await CallAsync("list_recordings", new { });
+            Assert.DoesNotContain(recordingId, ResultText(listed));
+
+            var rejected = await CallAsync("record_stop", new { recordingId });
+            Assert.True(rejected.GetProperty("isError").GetBoolean(), rejected.GetRawText());
         }
 
         private static ScriptRunStatusResponse ParseStatus(string json)

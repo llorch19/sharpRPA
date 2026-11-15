@@ -28,6 +28,14 @@ namespace sharpRPA.Tests
 
         public void Dispose()
         {
+            try
+            {
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            }
+            catch (Exception)
+            {
+            }
+
             if (System.IO.Directory.Exists(Directory))
             {
                 System.IO.Directory.Delete(Directory, true);

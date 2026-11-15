@@ -20,7 +20,7 @@ pwsh sharpRPA/bin/Debug/net10.0-windows10.0.19041.0/playwright.ps1 install chrom
 
 | Project | Target | Purpose |
 | --- | --- | --- |
-| `sharpRPA.Core` | `net10.0` | UI-free engine: script model, `ScriptRunner`, cross-platform commands, recording contracts, catalog/run services |
+| `sharpRPA.Core` | `net10.0` | UI-free engine: script model, `ScriptRunner`, cross-platform commands, recording lifecycle, SQLite storage, catalog/run/target services |
 | `sharpRPA.Windows` | `net10.0-windows` | Windows-only commands: Win32, UI Automation, Excel, OCR, screenshot, clipboard |
 | `sharpRPA` | `net10.0-windows` | WinForms script builder and debug runner |
 | `sharpRPA.Mcp` | `net10.0` + `net10.0-windows` | MCP stdio server for AI agents |
@@ -33,13 +33,38 @@ dotnet test sharpRPA.sln
 ```
 
 The suite covers script execution, validation, command discovery, script
-serialization against the shipped sample scripts, and drives the real MCP
-server as a child process over JSON-RPC.
+serialization against the shipped sample scripts, the recording lifecycle
+(staging, commit, crash recovery) and the derived target index, and drives the
+real MCP server as a child process over JSON-RPC.
+
+# Storage
+
+Scripts stay as XML files - they are code, so they remain copyable, diffable
+and readable by agents. Everything operational lives in one SQLite database
+(`Documents/sharpRPA/sharprpa.db`, override with `SHARPRPA_DB`):
+
+| Data | Where | Why |
+| --- | --- | --- |
+| Scripts | `.xml` files | portable, git-friendly, hand-editable |
+| Recording events | staging file while capturing, SQLite row on stop | a crash mid-capture never leaves a partial row |
+| Target index | SQLite (`target_index`) | derived from scripts + recordings, rebuildable |
+| Run history | in-memory (`ScriptRunManager`) | still volatile - persistence is the next increment |
+
+Recording lifecycle: `record_start` opens a JSONL staging file under
+`recording-staging/`, `record_event` appends, `record_stop` flushes to disk,
+gzips the events into the `recording` row, refreshes the target index and only
+then deletes the staging file. On startup the server reconciles orphans:
+a staging file with no row is imported as `incomplete`, a row with a leftover
+file just drops the file.
+
+The target index (`file`, `url`, `window`, `ui_element`) is read-only derived
+data - never a source of truth - so it can be rebuilt at any time with
+`rebuild_target_index`.
 
 # MCP Server
 
-`sharpRPA.Mcp` exposes scripts, the command catalogue and headless execution
-to AI agents over MCP (stdio).
+`sharpRPA.Mcp` exposes scripts, the command catalogue, headless execution,
+recording and the target index to AI agents over MCP (stdio).
 
 ```
 # cross-platform commands only (browser, HTTP, variables, flow control)
@@ -49,12 +74,20 @@ dotnet run --project sharpRPA.Mcp -f net10.0
 dotnet run --project sharpRPA.Mcp -f net10.0-windows10.0.19041.0
 ```
 
-Tools: `list_scripts`, `get_script`, `validate_script`, `list_commands`,
-`describe_command`, `run_script`, `get_run_status`, `get_run_log`, `cancel_run`.
+Tools:
+
+| Group | Tools |
+| --- | --- |
+| Scripts | `list_scripts`, `get_script`, `validate_script` |
+| Commands | `list_commands`, `describe_command` |
+| Execution | `run_script`, `get_run_status`, `get_run_log`, `cancel_run` |
+| Recording | `record_start`, `record_event`, `record_stop`, `record_abort`, `list_recordings`, `get_recording` |
+| Targets | `find_targets`, `rebuild_target_index` |
 
 Environment variables:
 
 - `SHARPRPA_SCRIPT_DIR` — script folder to serve (defaults to `Documents\sharpRPA\My Scripts`).
+- `SHARPRPA_DB` — SQLite database path (defaults to `Documents\sharpRPA\sharprpa.db`).
 
 Register it in opencode:
 

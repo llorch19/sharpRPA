@@ -117,6 +117,15 @@ namespace sharpRPA.Core.Services
             return detail;
         }
 
+        /// <summary>
+        /// Loads the raw script model (command objects, not flattened summaries) so callers
+        /// such as the target index can inspect command properties.
+        /// </summary>
+        public ScriptModel LoadScript(string path)
+        {
+            return ScriptModel.DeserializeFile(ResolvePath(path));
+        }
+
         public ScriptValidationResult ValidateScript(string path)
         {
             var result = new ScriptValidationResult();
@@ -293,7 +302,7 @@ namespace sharpRPA.Core.Services
             }
         }
 
-        private static IEnumerable<ScriptAction> Walk(IEnumerable<ScriptAction> actions)
+        public static IEnumerable<ScriptAction> Walk(IEnumerable<ScriptAction> actions)
         {
             foreach (var action in actions)
             {

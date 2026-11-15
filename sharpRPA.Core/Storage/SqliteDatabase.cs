@@ -9,7 +9,7 @@ namespace sharpRPA.Core.Storage
     /// </summary>
     public sealed class SqliteDatabase
     {
-        public const int SchemaVersion = 1;
+        public const int SchemaVersion = 2;
 
         private const string Schema = @"
 CREATE TABLE IF NOT EXISTS recording (
@@ -39,10 +39,22 @@ CREATE TABLE IF NOT EXISTS target_index (
     last_seen_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS artifact (
+    id         TEXT PRIMARY KEY,
+    run_id     TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    mime       TEXT,
+    bytes      INTEGER NOT NULL DEFAULT 0,
+    step       INTEGER,
+    created_at TEXT NOT NULL
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS ux_target_index
     ON target_index(kind, locator, source_kind, source_id, IFNULL(seq, -1));
 CREATE INDEX IF NOT EXISTS ix_target_locator ON target_index(locator);
 CREATE INDEX IF NOT EXISTS ix_recording_started ON recording(started_at DESC);
+CREATE INDEX IF NOT EXISTS ix_artifact_run ON artifact(run_id, step);
 ";
 
         public SqliteDatabase(string databasePath)

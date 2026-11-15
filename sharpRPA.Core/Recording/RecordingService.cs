@@ -73,6 +73,17 @@ namespace sharpRPA.Core.Recording
             get { return stagingDirectory; }
         }
 
+        /// <summary>Shared database so run artifacts live in the same workspace file.</summary>
+        public SqliteDatabase Database
+        {
+            get { return database; }
+        }
+
+        public string RunsDirectory
+        {
+            get { return Path.Combine(Path.GetDirectoryName(DatabasePath), "runs"); }
+        }
+
         public RecordingSession Start(string source, string title = null)
         {
             if (string.IsNullOrWhiteSpace(source))
@@ -93,9 +104,14 @@ namespace sharpRPA.Core.Recording
             return session;
         }
 
-        public List<RecordingInfo> List(int limit = 200)
+        public List<RecordingInfo> List(int limit = 200, int offset = 0)
         {
-            return recordings.List(limit);
+            return recordings.List(limit, offset);
+        }
+
+        public int CountRecordings()
+        {
+            return recordings.Count();
         }
 
         public IReadOnlyList<string> ActiveIds
@@ -182,9 +198,14 @@ namespace sharpRPA.Core.Recording
             return detail;
         }
 
-        public List<TargetHit> FindTargets(string query, string kind = null, int limit = 100)
+        public List<TargetHit> FindTargets(string query, string kind = null, int limit = 100, int offset = 0)
         {
-            return targets.Find(query, kind, limit);
+            return targets.Find(query, kind, limit, offset);
+        }
+
+        public int CountTargets(string query = null, string kind = null)
+        {
+            return targets.Count(query, kind);
         }
 
         /// <summary>

@@ -65,6 +65,8 @@ data - never a source of truth - so it can be rebuilt at any time with
 
 `sharpRPA.Mcp` exposes scripts, the command catalogue, headless execution,
 recording and the target index to AI agents over MCP (stdio).
+Contract design (tool taxonomy, response envelope, error codes, pagination,
+resources/prompts, security, artifacts): [`docs/mcp-design.md`](docs/mcp-design.md).
 
 ```
 # cross-platform commands only (browser, HTTP, variables, flow control)
@@ -74,13 +76,24 @@ dotnet run --project sharpRPA.Mcp -f net10.0
 dotnet run --project sharpRPA.Mcp -f net10.0-windows10.0.19041.0
 ```
 
+Every tool answers with the same envelope, so an agent only has to branch on `ok`:
+
+```json
+{ "ok": true,  "data": { }, "page": { "nextCursor": "...", "total": 46 } }
+{ "ok": false, "error": { "code": "NOT_FOUND", "message": "...", "hint": "..." } }
+```
+
+Failures are returned as `CallToolResult` with `isError=true` (throwing would lose the
+code to a generic SDK message). `page.nextCursor` is omitted on the last page.
+
 Tools:
 
 | Group | Tools |
 | --- | --- |
-| Scripts | `list_scripts`, `get_script`, `validate_script` |
+| Scripts | `list_scripts`, `get_script`, `validate_script`, `create_script`, `update_script` |
 | Commands | `list_commands`, `describe_command` |
 | Execution | `run_script`, `get_run_status`, `get_run_log`, `cancel_run` |
+| Artifacts | `list_artifacts`, `get_artifact` |
 | Recording | `record_start`, `record_event`, `record_stop`, `record_abort`, `list_recordings`, `get_recording` |
 | Targets | `find_targets`, `rebuild_target_index` |
 

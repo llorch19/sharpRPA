@@ -114,15 +114,16 @@ VALUES ($id, $source, $status, $title, $scriptPath, $actionCount, $durationMs, $
             }
         }
 
-        public List<RecordingInfo> List(int limit = 200)
+        public List<RecordingInfo> List(int limit = 200, int offset = 0)
         {
             var results = new List<RecordingInfo>();
 
             using (var connection = database.CreateConnection())
             using (var command = connection.CreateCommand())
             {
-                command.CommandText = "SELECT id, source, status, title, script_path, action_count, duration_ms, started_at, ended_at, created_at FROM recording ORDER BY started_at DESC LIMIT $limit;";
+                command.CommandText = "SELECT id, source, status, title, script_path, action_count, duration_ms, started_at, ended_at, created_at FROM recording ORDER BY started_at DESC LIMIT $limit OFFSET $offset;";
                 command.Parameters.AddWithValue("$limit", limit);
+                command.Parameters.AddWithValue("$offset", offset);
 
                 using (var reader = command.ExecuteReader())
                 {
@@ -134,6 +135,16 @@ VALUES ($id, $source, $status, $title, $scriptPath, $actionCount, $durationMs, $
             }
 
             return results;
+        }
+
+        public int Count()
+        {
+            using (var connection = database.CreateConnection())
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT COUNT(*) FROM recording;";
+                return Convert.ToInt32(command.ExecuteScalar());
+            }
         }
 
         public byte[] GetEvents(string id)

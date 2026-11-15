@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Playwright;
 using sharpRPA.Core.Execution;
 using sharpRPA.Core.Script;
+using sharpRPA.Core.Storage;
 using ScriptModel = sharpRPA.Core.Script.Script;
 
 namespace sharpRPA.Core.Services
@@ -39,6 +43,12 @@ namespace sharpRPA.Core.Services
         private const int MaxRetainedRuns = 50;
 
         private readonly ConcurrentDictionary<string, ScriptRunState> runs = new ConcurrentDictionary<string, ScriptRunState>();
+        private readonly ArtifactStore artifacts;
+
+        public ScriptRunManager(ArtifactStore artifacts = null)
+        {
+            this.artifacts = artifacts;
+        }
 
         public ScriptRunInfo Start(string scriptPath)
         {
@@ -107,7 +117,7 @@ namespace sharpRPA.Core.Services
             return state.CompletionTask.Wait(timeout);
         }
 
-        private static void Execute(ScriptRunState state, ScriptRunner runner, ScriptModel script)
+        private void Execute(ScriptRunState state, ScriptRunner runner, ScriptModel script)
         {
             try
             {
@@ -124,6 +134,9 @@ namespace sharpRPA.Core.Services
             }
             finally
             {
+                // capture while browser/excel instances are still alive
+                CaptureArtifacts(state, runner);
+
                 try
                 {
                     runner.CleanUp();
@@ -133,6 +146,63 @@ namespace sharpRPA.Core.Services
                 }
 
                 state.SignalCompletion();
+            }
+        }
+
+        /// <summary>
+        /// Writes the run log and any reachable browser state to the artifact folder.
+        /// Artifact capture must never fail a run, so every step is best effort.
+        /// </summary>
+        private void CaptureArtifacts(ScriptRunState state, ScriptRunner runner)
+        {
+            if (artifacts == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var directory = artifacts.EnsureRunDirectory(state.Id);
+                var snapshot = state.Snapshot();
+
+                var logPath = Path.Combine(directory, "run.log");
+                File.WriteAllLines(logPath, snapshot.Log, new UTF8Encoding(false));
+                artifacts.Register(state.Id, "log", logPath, "text/plain");
+
+                CaptureBrowserArtifacts(state.Id, directory, runner);
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private void CaptureBrowserArtifacts(string runId, string directory, ScriptRunner runner)
+        {
+            var index = 0;
+
+            foreach (var session in runner.AppInstances.Values.OfType<BrowserSession>())
+            {
+                index++;
+                var page = session.Page;
+                if ((page == null) || page.IsClosed)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var screenshotPath = Path.Combine(directory, "browser-" + index + ".png");
+                    page.ScreenshotAsync(new PageScreenshotOptions { Path = screenshotPath }).GetAwaiter().GetResult();
+                    artifacts.Register(runId, "screenshot", screenshotPath, "image/png", index);
+
+                    var domPath = Path.Combine(directory, "browser-" + index + ".html");
+                    File.WriteAllText(domPath, page.ContentAsync().GetAwaiter().GetResult(), new UTF8Encoding(false));
+                    artifacts.Register(runId, "dom", domPath, "text/html", index);
+                }
+                catch (Exception)
+                {
+                    // a dead page or missing browser must not mask the run result
+                }
             }
         }
 

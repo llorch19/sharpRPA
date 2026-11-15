@@ -108,12 +108,15 @@ namespace sharpRPA.Tests
                 new[]
                 {
                     "cancel_run",
+                    "create_script",
                     "describe_command",
                     "find_targets",
+                    "get_artifact",
                     "get_recording",
                     "get_run_log",
                     "get_run_status",
                     "get_script",
+                    "list_artifacts",
                     "list_commands",
                     "list_recordings",
                     "list_scripts",
@@ -123,6 +126,7 @@ namespace sharpRPA.Tests
                     "record_start",
                     "record_stop",
                     "run_script",
+                    "update_script",
                     "validate_script"
                 },
                 tools.OrderBy(name => name, StringComparer.Ordinal).ToArray());
@@ -136,9 +140,36 @@ namespace sharpRPA.Tests
         public async Task ListScripts_ReturnsTheConfiguredScriptFolder()
         {
             var result = await CallAsync("list_scripts", new { });
+            var envelope = Envelope(result);
 
-            Assert.False(result.TryGetProperty("isError", out var isError) && isError.GetBoolean(), result.GetRawText());
+            Assert.True(envelope.GetProperty("ok").GetBoolean(), envelope.GetRawText());
             Assert.Contains("agent-script.xml", ResultText(result));
+
+            var page = envelope.GetProperty("page");
+            Assert.True(page.GetProperty("total").GetInt32() >= 1);
+            // the SDK omits null properties, so "no cursor" means last page
+            Assert.False(page.TryGetProperty("nextCursor", out _), "last page must not advertise a cursor");
+        }
+
+        [Fact]
+        public async Task ListCommands_ReturnsTheCatalogueAndPaginates()
+        {
+            var result = await CallAsync("list_commands", new { limit = 5 });
+            var envelope = Envelope(result);
+
+            Assert.True(envelope.GetProperty("ok").GetBoolean(), envelope.GetRawText());
+
+            var items = envelope.GetProperty("data").EnumerateArray().ToList();
+            Assert.Equal(5, items.Count);
+            Assert.All(items, item =>
+            {
+                Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("typeName").GetString()));
+                Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("group").GetString()));
+            });
+
+            var total = envelope.GetProperty("page").GetProperty("total").GetInt32();
+            Assert.True(total > 5, "expected more than one page of commands");
+            Assert.True(envelope.GetProperty("page").TryGetProperty("nextCursor", out _), "first page must advertise a cursor");
         }
 
         [Fact]
@@ -147,40 +178,152 @@ namespace sharpRPA.Tests
             var result = await CallAsync("describe_command", new { commandName = "VariableCommand" });
             var text = ResultText(result);
 
+            Assert.True(Envelope(result).GetProperty("ok").GetBoolean());
             Assert.Contains("v_userVariableName", text);
             Assert.Contains("Set Variable", text);
         }
 
         [Fact]
-        public async Task DescribeCommand_UnknownCommandFails()
+        public async Task DescribeCommand_UnknownCommandFailsWithACode()
         {
-            try
-            {
-                var result = await CallAsync("describe_command", new { commandName = "NopeCommand" });
-                Assert.True(result.GetProperty("isError").GetBoolean(), result.GetRawText());
-            }
-            catch (InvalidOperationException ex)
-            {
-                // acceptable alternative: the SDK surfaced the tool exception as a JSON-RPC error
-                Assert.Contains("Unknown command", ex.Message);
-            }
+            var result = await CallAsync("describe_command", new { commandName = "NopeCommand" });
+
+            AssertIsError(result);
+
+            var envelope = Envelope(result);
+            Assert.False(envelope.GetProperty("ok").GetBoolean());
+            Assert.Equal("NOT_FOUND", envelope.GetProperty("error").GetProperty("code").GetString());
+            Assert.Contains("list_commands", envelope.GetProperty("error").GetProperty("hint").GetString());
+        }
+
+        [Fact]
+        public async Task GetScript_MissingFileFailsWithNotFound()
+        {
+            var result = await CallAsync("get_script", new { path = "does-not-exist.xml" });
+
+            AssertIsError(result);
+            Assert.Equal("NOT_FOUND", Envelope(result).GetProperty("error").GetProperty("code").GetString());
+        }
+
+        [Fact]
+        public async Task GetScript_CorruptFileFailsWithParseFailed()
+        {
+            File.WriteAllText(Path.Combine(scriptFolder.Directory, "corrupt.xml"), "this is not xml at all");
+
+            var result = await CallAsync("get_script", new { path = "corrupt.xml" });
+
+            AssertIsError(result);
+            Assert.Equal("PARSE_FAILED", Envelope(result).GetProperty("error").GetProperty("code").GetString());
+        }
+
+        [Fact]
+        public async Task ListScripts_InvalidCursorFailsWithInvalidArgument()
+        {
+            var result = await CallAsync("list_scripts", new { cursor = "not-a-cursor" });
+
+            AssertIsError(result);
+            Assert.Equal("INVALID_ARGUMENT", Envelope(result).GetProperty("error").GetProperty("code").GetString());
+        }
+
+        [Fact]
+        public async Task CreateScript_RejectsFolderNames()
+        {
+            var result = await CallAsync("create_script", new { name = "sub/flow" });
+
+            AssertIsError(result);
+            var envelope = Envelope(result);
+            Assert.Equal("INVALID_ARGUMENT", envelope.GetProperty("error").GetProperty("code").GetString());
+            Assert.Contains("plain file name", envelope.GetProperty("error").GetProperty("message").GetString());
+        }
+
+        [Fact]
+        public async Task GetScript_SummaryModeOnlyReturnsTopLevelCommands()
+        {
+            CopySampleScript("String Split Sample.xml", "nested.xml");
+
+            var full = await CallAsync("get_script", new { path = "nested.xml", mode = "full" });
+            var summary = await CallAsync("get_script", new { path = "nested.xml", mode = "summary" });
+
+            var fullRoot = Data(full);
+            var summaryRoot = Data(summary);
+
+            Assert.Equal("full", fullRoot.GetProperty("mode").GetString());
+            Assert.Equal("summary", summaryRoot.GetProperty("mode").GetString());
+
+            var totalCount = fullRoot.GetProperty("commandCount").GetInt32();
+            Assert.True(totalCount > 1, "sample script should have nested commands");
+
+            var summaryCount = summaryRoot.GetProperty("commands").GetArrayLength();
+            Assert.True(summaryCount < totalCount, "summary must drop nested commands");
+            Assert.All(summaryRoot.GetProperty("commands").EnumerateArray(), command => Assert.Equal(0, command.GetProperty("depth").GetInt32()));
+        }
+
+        [Fact]
+        public async Task CreateAndUpdateScript_RoundTrip()
+        {
+            var created = await CallAsync("create_script", new { name = "agent-created" });
+            var createdRoot = Data(created);
+            Assert.True(createdRoot.GetProperty("created").GetBoolean());
+            var path = createdRoot.GetProperty("path").GetString();
+            Assert.EndsWith("agent-created.xml", path);
+
+            var conflict = await CallAsync("create_script", new { name = "agent-created" });
+            AssertIsError(conflict);
+            Assert.Equal("ALREADY_EXISTS", Envelope(conflict).GetProperty("error").GetProperty("code").GetString());
+
+            // seed with a real script, then replace it
+            CopySampleScript("If Conditional Sample.xml", "seeded.xml");
+            var seedXml = File.ReadAllText(Path.Combine(scriptFolder.Directory, "seeded.xml"));
+
+            var updated = await CallAsync("update_script", new { path = "agent-created.xml", xml = seedXml });
+            Assert.True(Data(updated).GetProperty("updated").GetBoolean());
+
+            var reloaded = await CallAsync("get_script", new { path = "agent-created.xml", mode = "summary" });
+            Assert.True(Data(reloaded).GetProperty("commandCount").GetInt32() > 0);
+
+            var invalid = await CallAsync("update_script", new { path = "agent-created.xml", xml = "<not-a-script/>" });
+            AssertIsError(invalid);
+            Assert.Equal("PARSE_FAILED", Envelope(invalid).GetProperty("error").GetProperty("code").GetString());
+        }
+
+        [Fact]
+        public async Task Pagination_ReturnsCursorAndTotal()
+        {
+            CopySampleScript("String Split Sample.xml", "page-two.xml");
+
+            var firstPage = await CallAsync("list_scripts", new { limit = 1 });
+            var firstEnvelope = Envelope(firstPage);
+            var firstItems = firstEnvelope.GetProperty("data").EnumerateArray().ToList();
+            Assert.Single(firstItems);
+
+            var nextCursor = firstEnvelope.GetProperty("page").GetProperty("nextCursor").GetString();
+            Assert.False(string.IsNullOrEmpty(nextCursor));
+            Assert.Equal(2, firstEnvelope.GetProperty("page").GetProperty("total").GetInt32());
+
+            var secondPage = await CallAsync("list_scripts", new { limit = 1, cursor = nextCursor });
+            var secondEnvelope = Envelope(secondPage);
+            var secondItems = secondEnvelope.GetProperty("data").EnumerateArray().ToList();
+            Assert.Single(secondItems);
+            Assert.NotEqual(firstItems[0].GetProperty("name").GetString(), secondItems[0].GetProperty("name").GetString());
+            Assert.False(secondEnvelope.GetProperty("page").TryGetProperty("nextCursor", out _), "last page must not advertise a cursor");
         }
 
         [Fact]
         public async Task ValidateAndRunScript_ToCompletion()
         {
             var validation = await CallAsync("validate_script", new { path = "agent-script.xml" });
+            Assert.True(Envelope(validation).GetProperty("ok").GetBoolean());
             Assert.Contains("\"isValid\":true", ResultText(validation));
 
             var run = await CallAsync("run_script", new { path = "agent-script.xml" });
-            var runId = JsonDocument.Parse(ResultText(run)).RootElement.GetProperty("id").GetString();
+            var runId = Data(run).GetProperty("id").GetString();
             Assert.False(string.IsNullOrEmpty(runId));
 
             ScriptRunStatusResponse status = null;
             for (var attempt = 0; attempt < 50; attempt++)
             {
                 var statusResult = await CallAsync("get_run_status", new { runId });
-                status = ParseStatus(ResultText(statusResult));
+                status = ParseStatus(Data(statusResult).GetRawText());
                 if (status.Status != "Running")
                 {
                     break;
@@ -195,13 +338,29 @@ namespace sharpRPA.Tests
 
             var logResult = await CallAsync("get_run_log", new { runId, maxLines = 50 });
             Assert.Contains("Running Line", ResultText(logResult));
+
+            // the run log is also persisted as an artifact so the agent can read it as a file
+            var artifactList = await CallAsync("list_artifacts", new { runId });
+            var artifacts = Data(artifactList);
+            Assert.Equal(1, artifacts.GetProperty("total").GetInt32());
+            var artifactId = artifacts.GetProperty("artifacts")[0].GetProperty("id").GetString();
+            Assert.Equal("log", artifacts.GetProperty("artifacts")[0].GetProperty("kind").GetString());
+
+            var artifact = await CallAsync("get_artifact", new { artifactId });
+            var artifactRoot = Data(artifact);
+            Assert.Equal("text", artifactRoot.GetProperty("encoding").GetString());
+            Assert.Contains("Running Line", artifactRoot.GetProperty("content").GetString());
+
+            var missingArtifact = await CallAsync("get_artifact", new { artifactId = "nope" });
+            AssertIsError(missingArtifact);
+            Assert.Equal("NOT_FOUND", Envelope(missingArtifact).GetProperty("error").GetProperty("code").GetString());
         }
 
         [Fact]
         public async Task RecordLifecycle_CommitsToSqliteAndIndexesTargets()
         {
             var started = await CallAsync("record_start", new { source = "browser", title = "mcp capture" });
-            var recordingId = JsonDocument.Parse(ResultText(started)).RootElement.GetProperty("id").GetString();
+            var recordingId = Data(started).GetProperty("id").GetString();
             Assert.False(string.IsNullOrEmpty(recordingId));
 
             var firstEvent = await CallAsync("record_event", new
@@ -231,13 +390,17 @@ namespace sharpRPA.Tests
             Assert.Contains("\"actionCount\":2", stoppedText);
             Assert.Contains("\"title\":\"mcp capture\"", stoppedText);
 
+            // stopping an already committed recording is a distinct error from an unknown id
+            var stoppedAgain = await CallAsync("record_stop", new { recordingId });
+            AssertIsError(stoppedAgain);
+            Assert.Equal("ALREADY_FINISHED", Envelope(stoppedAgain).GetProperty("error").GetProperty("code").GetString());
+
             var listed = await CallAsync("list_recordings", new { });
             Assert.Contains(recordingId, ResultText(listed));
 
             var detail = await CallAsync("get_recording", new { recordingId });
-            using (var detailDocument = JsonDocument.Parse(ResultText(detail)))
             {
-                var root = detailDocument.RootElement;
+                var root = Data(detail);
                 Assert.Equal("completed", root.GetProperty("status").GetString());
                 Assert.Equal(2, root.GetProperty("events").GetArrayLength());
                 Assert.Equal("//button[@id='save']", root.GetProperty("events")[0].GetProperty("target").GetString());
@@ -257,18 +420,70 @@ namespace sharpRPA.Tests
         public async Task RecordAbort_WritesNothing()
         {
             var started = await CallAsync("record_start", new { source = "windows-desktop" });
-            var recordingId = JsonDocument.Parse(ResultText(started)).RootElement.GetProperty("id").GetString();
+            var recordingId = Data(started).GetProperty("id").GetString();
 
             await CallAsync("record_event", new { recordingId, actionType = "click", target = "OK" });
 
             var aborted = await CallAsync("record_abort", new { recordingId });
-            Assert.Contains("\"cancelled\":true", ResultText(aborted));
+            Assert.True(Data(aborted).GetProperty("aborted").GetBoolean(), ResultText(aborted));
 
             var listed = await CallAsync("list_recordings", new { });
             Assert.DoesNotContain(recordingId, ResultText(listed));
 
             var rejected = await CallAsync("record_stop", new { recordingId });
-            Assert.True(rejected.GetProperty("isError").GetBoolean(), rejected.GetRawText());
+            AssertIsError(rejected);
+            Assert.Equal("NOT_IN_PROGRESS", Envelope(rejected).GetProperty("error").GetProperty("code").GetString());
+
+            // an id that never existed reports the same code
+            var unknown = await CallAsync("record_stop", new { recordingId = "never-existed" });
+            AssertIsError(unknown);
+            Assert.Equal("NOT_IN_PROGRESS", Envelope(unknown).GetProperty("error").GetProperty("code").GetString());
+        }
+
+        [Fact]
+        public async Task CancelRun_StopsARunningScript()
+        {
+            // a 30s pause guarantees the run is still alive when we cancel it
+            var script = new sharpRPA.Core.Script.Script();
+            script.Commands.Add(new sharpRPA.Core.Script.ScriptAction
+            {
+                ScriptCommand = new PauseCommand { v_PauseLength = 30000 }
+            });
+            File.WriteAllText(
+                Path.Combine(scriptFolder.Directory, "slow.xml"),
+                sharpRPA.Core.Script.Script.SerializeToString(script));
+
+            var run = await CallAsync("run_script", new { path = "slow.xml" });
+            var runId = Data(run).GetProperty("id").GetString();
+
+            // wait until it is observably running
+            for (var attempt = 0; attempt < 50; attempt++)
+            {
+                var status = await CallAsync("get_run_status", new { runId });
+                if (Data(status).GetProperty("status").GetString() == "Running")
+                {
+                    break;
+                }
+
+                await Task.Delay(50);
+            }
+
+            var cancelled = await CallAsync("cancel_run", new { runId });
+            Assert.True(Data(cancelled).GetProperty("cancelled").GetBoolean(), ResultText(cancelled));
+
+            for (var attempt = 0; attempt < 100; attempt++)
+            {
+                var status = await CallAsync("get_run_status", new { runId });
+                if (Data(status).GetProperty("status").GetString() != "Running")
+                {
+                    Assert.Equal("Cancelled", Data(status).GetProperty("status").GetString());
+                    return;
+                }
+
+                await Task.Delay(100);
+            }
+
+            Assert.Fail("run did not reach a terminal state after cancel_run");
         }
 
         private static ScriptRunStatusResponse ParseStatus(string json)
@@ -279,10 +494,37 @@ namespace sharpRPA.Tests
             });
         }
 
+        private static void AssertIsError(JsonElement result)
+        {
+            // the SDK omits isError when it is false, so treat a missing flag as success
+            Assert.True(result.TryGetProperty("isError", out var flag) && flag.GetBoolean(),
+                "expected an error result but got: " + result.GetRawText());
+        }
+
         private static string ResultText(JsonElement result)
         {
             var content = result.GetProperty("content").EnumerateArray().First();
             return content.GetProperty("text").GetString();
+        }
+
+        /// <summary>Parses the { ok, data, page } envelope returned by every tool.</summary>
+        private static JsonElement Envelope(JsonElement result)
+        {
+            using (var document = JsonDocument.Parse(ResultText(result)))
+            {
+                return document.RootElement.Clone();
+            }
+        }
+
+        private static JsonElement Data(JsonElement result)
+        {
+            return Envelope(result).GetProperty("data");
+        }
+
+        private void CopySampleScript(string sampleFileName, string targetFileName)
+        {
+            var source = Path.Combine(AppContext.BaseDirectory, "Samples", sampleFileName);
+            File.Copy(source, Path.Combine(scriptFolder.Directory, targetFileName), true);
         }
 
         private async Task<JsonElement> CallAsync(string name, object arguments)

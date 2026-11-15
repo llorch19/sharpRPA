@@ -148,6 +148,38 @@ namespace sharpRPA.Core.Services
                 return result;
             }
 
+            return ValidateLoaded(script, result);
+        }
+
+        /// <summary>
+        /// Validates script XML in memory, before it is written to disk.
+        /// </summary>
+        public ScriptValidationResult ValidateXml(string scriptXml)
+        {
+            var result = new ScriptValidationResult();
+
+            if (string.IsNullOrWhiteSpace(scriptXml))
+            {
+                result.Errors.Add("Script XML is empty.");
+                return result;
+            }
+
+            ScriptModel script;
+            try
+            {
+                script = ScriptModel.DeserializeXML(scriptXml);
+            }
+            catch (Exception ex)
+            {
+                result.Errors.Add("Script could not be parsed: " + ex.Message);
+                return result;
+            }
+
+            return ValidateLoaded(script, result);
+        }
+
+        private static ScriptValidationResult ValidateLoaded(ScriptModel script, ScriptValidationResult result)
+        {
             if ((script.Commands == null) || (script.Commands.Count == 0))
             {
                 result.Errors.Add("Script contains no commands.");
@@ -163,6 +195,81 @@ namespace sharpRPA.Core.Services
             ValidateVariables(script, result);
 
             return result;
+        }
+
+        /// <summary>
+        /// Creates a new script file. Throws <see cref="IOException"/> when it already exists.
+        /// </summary>
+        public string CreateScript(string name, string scriptXml = null)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new ArgumentException("A script name is required.", nameof(name));
+            }
+
+            var fileName = name.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ? name : name + ".xml";
+            var path = ResolvePath(fileName);
+
+            Directory.CreateDirectory(scriptDirectory);
+
+            var payload = string.IsNullOrWhiteSpace(scriptXml)
+                ? ScriptModel.SerializeToString(new ScriptModel())
+                : scriptXml;
+
+            // CreateNew keeps the existence check atomic
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                var bytes = new System.Text.UTF8Encoding(false).GetBytes(payload);
+                stream.Write(bytes, 0, bytes.Length);
+            }
+
+            return path;
+        }
+
+        /// <summary>
+        /// Replaces an existing script atomically (write temp file, then move over).
+        /// Throws <see cref="FileNotFoundException"/> when the script does not exist.
+        /// </summary>
+        public string UpdateScript(string path, string scriptXml)
+        {
+            if (string.IsNullOrWhiteSpace(scriptXml))
+            {
+                throw new ArgumentException("Script XML is required.", nameof(scriptXml));
+            }
+
+            var resolvedPath = ResolvePath(path);
+
+            if (!File.Exists(resolvedPath))
+            {
+                throw new FileNotFoundException("Script file not found: " + resolvedPath, resolvedPath);
+            }
+
+            WriteAtomic(resolvedPath, scriptXml);
+            return resolvedPath;
+        }
+
+        private static void WriteAtomic(string path, string content)
+        {
+            var temporaryPath = path + ".tmp-" + Guid.NewGuid().ToString("N");
+
+            try
+            {
+                File.WriteAllText(temporaryPath, content, new System.Text.UTF8Encoding(false));
+                File.Move(temporaryPath, path, true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    try
+                    {
+                        File.Delete(temporaryPath);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                }
+            }
         }
 
         private static void Flatten(IEnumerable<ScriptAction> actions, int depth, List<ScriptCommandInfo> target)

@@ -10,6 +10,7 @@ using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using sharpRPA.Core.Recording;
 using sharpRPA.Core.Services;
+using sharpRPA.Core.Storage;
 
 namespace sharpRPA.Mcp
 {
@@ -26,9 +27,10 @@ namespace sharpRPA.Mcp
             var scriptDirectory = Environment.GetEnvironmentVariable("SHARPRPA_SCRIPT_DIR");
             var scripts = new ScriptCatalog(scriptDirectory);
             var commands = new CommandCatalog();
-            var runs = new ScriptRunManager();
             var recordings = CreateRecordingService();
             RecoverStagingFiles(recordings);
+            var artifacts = new ArtifactStore(recordings.Database, recordings.RunsDirectory);
+            var runs = new ScriptRunManager(artifacts);
 
             var builder = Host.CreateApplicationBuilder(args);
 
@@ -58,7 +60,7 @@ namespace sharpRPA.Mcp
                         "Scripts that use Windows-only commands (window, UI Automation, Excel, OCR) require the Windows build of this server.";
                 })
                 .WithStdioServerTransport()
-                .WithTools(SharpRpaTools.Create(scripts, commands, runs, recordings));
+                .WithTools(SharpRpaTools.Create(scripts, commands, runs, recordings, artifacts));
 
             await builder.Build().RunAsync();
         }

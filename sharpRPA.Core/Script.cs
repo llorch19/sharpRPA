@@ -194,6 +194,32 @@ namespace sharpRPA.Core.Script
             Script deserializedData = (Script)serializer.Deserialize(reader);
             return deserializedData;
         }
+
+        /// <summary>
+        /// Serializes a script to an XML string (UTF-8 declaration) without touching the disk.
+        /// </summary>
+        public static string SerializeToString(Script script)
+        {
+            if (script == null)
+            {
+                throw new ArgumentNullException(nameof(script));
+            }
+
+            var serializer = CreateSerializer();
+            using (var writer = new Utf8StringWriter())
+            {
+                serializer.Serialize(writer, script);
+                return writer.ToString();
+            }
+        }
+
+        private sealed class Utf8StringWriter : System.IO.StringWriter
+        {
+            public override System.Text.Encoding Encoding
+            {
+                get { return System.Text.Encoding.UTF8; }
+            }
+        }
     }
 
     public class ScriptAction

@@ -10,6 +10,7 @@
 | 录制事件边界 | ✅ 完成 | `RecordedAction` / `IRecordingSink` / `InMemoryRecordingSink`，浏览器与桌面录制共用 |
 | 可测试性 | ✅ 完成 | `sharpRPA.Tests` 84 个用例，跨平台运行（含真实 sample 脚本往返、录制崩溃恢复、目标索引、MCP 进程级集成测试） |
 | Phase 1 MCP | ✅ 完成 | `sharpRPA.Mcp` stdio server，17 个工具，跨平台腿 + Windows 全命令腿 |
+| P0 契约与观测 | ✅ 完成 | 统一信封 `{ok,data,page}`、闭集错误码、分页、`create/update_script`、`list/get_artifact`（工具数 17 → 21）；运行日志必产为产物 |
 | 录制存储 | ✅ 完成 | 暂存 JSONL → `record_stop` 时 gzip 入 SQLite；启动时孤儿文件回收（缺行导入为 `incomplete`，多余文件删除） |
 | 目标索引 | ✅ 完成 | `target_index` 由脚本与录制派生，`find_targets` / `rebuild_target_index`，只读可重建 |
 | Phase 2 事件采集 | ⬜ 未开始 | 浏览器 Playwright 注入录制、Windows UIA/钩子录制（存储与生命周期已就绪） |
@@ -171,6 +172,8 @@ public interface IScriptExecutionContext
 
 ## 5. MCP 集成
 
+> 完整的契约设计（工具分层、响应信封、错误码、分页、异步任务、resources/prompts、安全、产物模型、版本演进）见 [mcp-design.md](mcp-design.md)。
+
 MCP 是优先级最高的改造。官方 C# SDK `ModelContextProtocol` 当前为 2.4.0，支持 stdio 和 ASP.NET Core HTTP。opencode 等 agent 优先使用 stdio Server。
 
 前置条件：
@@ -180,13 +183,15 @@ MCP 是优先级最高的改造。官方 C# SDK `ModelContextProtocol` 当前为
 - 将 Windows 专属命令注册到平台后端。
 - 提供 `CommandCatalog` 和 JSON Schema。
 
-已实现工具：
+已实现工具（21 个，与 `sharpRPA.Mcp` 代码一致）：
 
 ```text
 # 脚本
 list_scripts
 get_script
 validate_script
+create_script
+update_script
 
 # 命令
 list_commands
@@ -197,6 +202,10 @@ run_script
 get_run_status
 get_run_log
 cancel_run
+
+# 产物
+list_artifacts
+get_artifact
 
 # 录制
 record_start
@@ -211,7 +220,7 @@ find_targets
 rebuild_target_index
 ```
 
-计划中的工具：`create_script`、`update_script`、`get_artifact`、`generate_script_from_recording`。
+计划中的工具：`generate_script_from_recording`、`list_runs`、`get_job`。
 
 Agent 工作流：
 

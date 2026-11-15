@@ -93,30 +93,20 @@ SET observed_count = observed_count + 1, last_seen_at = $lastSeenAt;";
             }
         }
 
-        public List<TargetHit> Find(string query, string kind = null, int limit = 100)
+        public List<TargetHit> Find(string query, string kind = null, int limit = 100, int offset = 0)
         {
             var results = new List<TargetHit>();
 
             using (var connection = database.CreateConnection())
             using (var command = connection.CreateCommand())
             {
-                var sql = "SELECT kind, locator, locator_kind, app_hint, source_kind, source_id, seq, observed_count, last_seen_at FROM target_index WHERE 1 = 1";
-
-                if (!string.IsNullOrWhiteSpace(query))
-                {
-                    sql += " AND (locator LIKE $query OR IFNULL(app_hint, '') LIKE $query)";
-                    command.Parameters.AddWithValue("$query", "%" + query + "%");
-                }
-
-                if (!string.IsNullOrWhiteSpace(kind))
-                {
-                    sql += " AND kind = $kind";
-                    command.Parameters.AddWithValue("$kind", kind);
-                }
-
-                sql += " ORDER BY locator, source_kind, source_id, IFNULL(seq, 0) LIMIT $limit;";
-                command.CommandText = sql;
+                var filter = BuildFilter(command, query, kind);
+                command.CommandText =
+                    "SELECT kind, locator, locator_kind, app_hint, source_kind, source_id, seq, observed_count, last_seen_at FROM target_index"
+                    + filter
+                    + " ORDER BY locator, source_kind, source_id, IFNULL(seq, 0) LIMIT $limit OFFSET $offset;";
                 command.Parameters.AddWithValue("$limit", limit);
+                command.Parameters.AddWithValue("$offset", offset);
 
                 using (var reader = command.ExecuteReader())
                 {
@@ -139,6 +129,36 @@ SET observed_count = observed_count + 1, last_seen_at = $lastSeenAt;";
             }
 
             return results;
+        }
+
+        public int Count(string query = null, string kind = null)
+        {
+            using (var connection = database.CreateConnection())
+            using (var command = connection.CreateCommand())
+            {
+                var filter = BuildFilter(command, query, kind);
+                command.CommandText = "SELECT COUNT(*) FROM target_index" + filter + ";";
+                return Convert.ToInt32(command.ExecuteScalar());
+            }
+        }
+
+        private static string BuildFilter(SqliteCommand command, string query, string kind)
+        {
+            var filter = " WHERE 1 = 1";
+
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                filter += " AND (locator LIKE $query OR IFNULL(app_hint, '') LIKE $query)";
+                command.Parameters.AddWithValue("$query", "%" + query + "%");
+            }
+
+            if (!string.IsNullOrWhiteSpace(kind))
+            {
+                filter += " AND kind = $kind";
+                command.Parameters.AddWithValue("$kind", kind);
+            }
+
+            return filter;
         }
 
         public int Count(string sourceKind = null)

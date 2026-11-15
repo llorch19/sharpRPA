@@ -92,7 +92,8 @@ Tools:
 | --- | --- |
 | Scripts | `list_scripts`, `get_script`, `validate_script`, `create_script`, `update_script` |
 | Commands | `list_commands`, `describe_command` |
-| Execution | `run_script`, `get_run_status`, `get_run_log`, `cancel_run` |
+| Execution | `run_script`, `get_run_status`, `get_run_log`, `cancel_run`, `list_runs` |
+| Jobs | `get_job` (`rebuild_target_index` returns a jobId) |
 | Artifacts | `list_artifacts`, `get_artifact` |
 | Recording | `record_start`, `record_event`, `record_stop`, `record_abort`, `list_recordings`, `get_recording` |
 | Targets | `find_targets`, `rebuild_target_index` |
@@ -101,6 +102,28 @@ Environment variables:
 
 - `SHARPRPA_SCRIPT_DIR` — script folder to serve (defaults to `Documents\sharpRPA\My Scripts`).
 - `SHARPRPA_DB` — SQLite database path (defaults to `Documents\sharpRPA\sharprpa.db`).
+- `SHARPRPA_POLICY` — optional `sharprpa.policy.json` path (defaults to `<workspace>/sharprpa.policy.json`).
+
+The server also advertises MCP resources and prompts:
+
+- Resources: `sharprpa://scripts`, `sharprpa://script/{path}`, `sharprpa://recordings`
+- Prompts: `optimise-script`, `record-flow`
+
+Security defaults (`sharprpa.policy.json`, all optional):
+
+```json
+{
+  "scriptRoots": ["C:\\Users\\me\\Documents\\sharpRPA\\My Scripts"],
+  "deniedCommandTypes": ["StartProcessCommand"],
+  "runTimeoutSeconds": 300
+}
+```
+
+When `scriptRoots` is omitted it defaults to the script folder, so `run_script` cannot
+execute an arbitrary file. Denied command types are checked before a run starts, and the
+timeout turns an over-long run into a `failed` status with a clear message. Every state
+changing tool call (`run_script`, `create/update_script`, `record_*`, `rebuild_target_index`)
+writes one row to the `audit` table with the client name and outcome.
 
 Register it in opencode:
 

@@ -13,6 +13,7 @@
 | P0 契约与观测 | ✅ 完成 | 统一信封 `{ok,data,page}`、闭集错误码、分页、`create/update_script`、`list/get_artifact`（工具数 17 → 21）；运行日志必产为产物 |
 | 录制存储 | ✅ 完成 | 暂存 JSONL → `record_stop` 时 gzip 入 SQLite；启动时孤儿文件回收（缺行导入为 `incomplete`，多余文件删除） |
 | 目标索引 | ✅ 完成 | `target_index` 由脚本与录制派生，`find_targets` / `rebuild_target_index`，只读可重建 |
+| P1 持久与策略 | ✅ 完成 | `run`/`run_log` 落库 + `list_runs`；`sharprpa.policy.json`（默认锁脚本目录、命令黑名单、运行超时）+ `audit` 表；resources/prompts；`rebuild_target_index` 异步化 + `get_job`（工具数 21 → 23） |
 | Phase 2 事件采集 | ⬜ 未开始 | 浏览器 Playwright 注入录制、Windows UIA/钩子录制（存储与生命周期已就绪） |
 | Phase 3 Avalonia | ⬜ 未开始 | 视产品需要 |
 
@@ -183,7 +184,7 @@ MCP 是优先级最高的改造。官方 C# SDK `ModelContextProtocol` 当前为
 - 将 Windows 专属命令注册到平台后端。
 - 提供 `CommandCatalog` 和 JSON Schema。
 
-已实现工具（21 个，与 `sharpRPA.Mcp` 代码一致）：
+已实现工具（23 个，与 `sharpRPA.Mcp` 代码一致）：
 
 ```text
 # 脚本
@@ -202,6 +203,10 @@ run_script
 get_run_status
 get_run_log
 cancel_run
+list_runs
+
+# 后台任务
+get_job
 
 # 产物
 list_artifacts
@@ -220,7 +225,7 @@ find_targets
 rebuild_target_index
 ```
 
-计划中的工具：`generate_script_from_recording`、`list_runs`、`get_job`。
+计划中的工具：`generate_script_from_recording`、`list_audit`。
 
 Agent 工作流：
 

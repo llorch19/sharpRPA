@@ -2,7 +2,7 @@
 
 本文定义 MCP 层的契约设计：工具分层、响应与错误模型、分页、异步任务、原生资源、状态与并发、安全、产物模型、版本演进。
 
-实现基线：`b1161b8` 起步；P0 契约加固与产物观测已落地（21 个工具，stdio transport，`ModelContextProtocol` 2.4.0）。
+实现基线：`b1161b8` 起步；P0 契约加固与产物观测、P1 持久化/策略/资源提示/异步任务已落地（23 个工具，stdio transport，`ModelContextProtocol` 2.4.0）。
 
 ## 1. 设计原则
 
@@ -23,13 +23,12 @@
 | `script` | `list_scripts`, `get_script`, `validate_script` | ✅ |
 | | `create_script`, `update_script` | ✅ |
 | `command` | `list_commands`, `describe_command` | ✅ |
-| `run` | `run_script`, `get_run_status`, `get_run_log`, `cancel_run` | ✅ |
-| | `list_runs` | ⬜ P1（依赖 run 落库） |
+| `run` | `run_script`, `get_run_status`, `get_run_log`, `cancel_run`, `list_runs` | ✅ |
 | `record` | `record_start`, `record_event`, `record_stop`, `record_abort`, `list_recordings`, `get_recording` | ✅ |
 | | `generate_script_from_recording` | ⬜ P2 |
 | `target` | `find_targets`, `rebuild_target_index` | ✅ |
 | `artifact` | `list_artifacts`, `get_artifact` | ✅ |
-| `job` | `get_job` | ⬜ P1 |
+| `job` | `get_job`（`rebuild_target_index` 返回 jobId） | ✅ |
 
 `create_script` / `update_script` 不只是便利：脚本目录默认在 `Documents`，位于 agent workspace 之外，没有这两个工具就只能依赖 `external_directory` 文件授权。
 
@@ -215,16 +214,16 @@ agent 优化质量的上限取决于它能不能"看见"，这是当前最大的
 | ~~错误靠抛异常~~ | ~~无 code、无 hint~~ | 结构化 error + 闭集错误码；返回 `CallToolResult` 而非抛异常，另有 `GuardedMcpServerTool` 兜底 INTERNAL | ✅ |
 | ~~`list_*` 无分页~~ | ~~大输出撑爆上下文~~ | `limit` + `cursor`，`page.nextCursor` 末页缺省 | ✅ |
 | ~~`get_script` 永远全量拍平~~ | ~~500 命令脚本返回爆炸~~ | `mode=summary\|full` | ✅ |
-| `rebuild_target_index` 同步执行 | 秒级阻塞请求 | 返回 `jobId` | P1 |
+| ~~`rebuild_target_index` 同步执行~~ | ~~秒级阻塞请求~~ | 返回 `jobId` + `get_job` 轮询 | ✅ |
 | 脚本目录在 workspace 外 | agent 文件工具改不了脚本 | `create_script` / `update_script` | ✅ |
 | 无产物概念 | agent 看不见 UI，无法判断"改对没改对" | `list_artifacts` / `get_artifact`；运行日志必产，浏览器截图/DOM 尽力采集 | ✅ |
-| 运行状态仅内存，上限 50 条 | 重启丢状态，跨进程查不到 | `run` / `run_log` 落库 | P1 |
-| 无策略与审计 | 任意路径可执行、命令无白名单 | `sharprpa.policy.json` + `audit` 表 | P1 |
+| ~~运行状态仅内存~~ | ~~重启丢状态~~ | `run` / `run_log` 落库，启动时把中断的 running 标为 failed；`list_runs` 支持按状态过滤 | ✅ |
+| ~~无策略与审计~~ | ~~任意路径可执行~~ | `sharprpa.policy.json`（scriptRoots 默认锁脚本目录 / deniedCommandTypes / runTimeoutSeconds）+ `audit` 表 | ✅ |
 | 无 prompts | 多步流程靠 agent 自己摸 | `optimize-script` / `record-flow` | P2 |
 
 ## 12. 实施顺序
 
 1. **P0 — 契约加固** ✅：统一信封 + 错误码 + 分页 + `get_script` 模式 + `create/update_script`，92 个测试同步迁移。
 2. **P0 — 观测** ✅：`list_artifacts` / `get_artifact`，运行日志必产、浏览器截图/DOM 尽力采集，打通"执行 → 看见 → 修改 → 复验"闭环。
-3. **P1 — 持久与策略**：run 落库、resources/prompts、策略文件与审计、异步 job。
+3. **P1 — 持久与策略** ✅：`run`/`run_log` 落库 + `list_runs`；`sharprpa.policy.json` 与 `audit` 表；resources 与 prompts；`rebuild_target_index` 异步化 + `get_job`。
 4. **P2 — 录制闭环**：采集钩子 → `generate_script_from_recording` → 回放命中率报告。

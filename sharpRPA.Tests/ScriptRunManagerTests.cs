@@ -25,11 +25,11 @@ namespace sharpRPA.Tests
                 var started = manager.Start(path);
 
                 // the script is tiny, so it may already have finished by the time Start returns
-                Assert.Contains(started.Status, new[] { "Running", "Succeeded" });
+                Assert.Contains(started.Status, new[] { "running", "succeeded" });
                 Assert.True(manager.WaitForCompletion(started.Id, TimeSpan.FromSeconds(10)));
 
                 var finished = manager.Get(started.Id);
-                Assert.Equal("Succeeded", finished.Status);
+                Assert.Equal("succeeded", finished.Status);
                 Assert.Null(finished.Error);
                 Assert.NotNull(finished.EndedAt);
                 Assert.Contains(finished.Log, line => line.Contains("Running Line"));
@@ -71,7 +71,28 @@ namespace sharpRPA.Tests
                 Assert.True(manager.WaitForCompletion(started.Id, TimeSpan.FromSeconds(5)));
 
                 var finished = manager.Get(started.Id);
-                Assert.Equal("Cancelled", finished.Status);
+                Assert.Equal("cancelled", finished.Status);
+            }
+        }
+
+        [Fact]
+        public void Start_WithTimeoutFailsTheRun()
+        {
+            using (var folder = new TempScriptDirectory())
+            {
+                var scriptPath = folder.Write("timeout.xml", new List<ScriptCommand>
+                {
+                    new PauseCommand { v_PauseLength = 30000 }
+                });
+
+                var manager = new ScriptRunManager();
+                var run = manager.Start(scriptPath, timeoutSeconds: 1);
+
+                Assert.True(manager.WaitForCompletion(run.Id, TimeSpan.FromSeconds(15)));
+
+                var finished = manager.Get(run.Id);
+                Assert.Equal("failed", finished.Status);
+                Assert.Contains("Timed out after 1s", finished.Error);
             }
         }
 
@@ -91,7 +112,7 @@ namespace sharpRPA.Tests
                 Assert.True(manager.WaitForCompletion(started.Id, TimeSpan.FromSeconds(10)));
 
                 var finished = manager.Get(started.Id);
-                Assert.Equal("Failed", finished.Status);
+                Assert.Equal("failed", finished.Status);
                 Assert.Contains("Variable was not found", finished.Error);
             }
         }

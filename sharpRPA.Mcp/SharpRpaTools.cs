@@ -2,8 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using sharpRPA.Core.Recording;
+using sharpRPA.Core.Security;
 using sharpRPA.Core.Services;
 using sharpRPA.Core.Storage;
 
@@ -20,7 +23,7 @@ namespace sharpRPA.Mcp
         private const int DefaultLogLines = 200;
         private const int MaxLogLines = 5000;
 
-        public static McpServerTool[] Create(ScriptCatalog scripts, CommandCatalog commands, ScriptRunManager runs, RecordingService recordings, ArtifactStore artifacts)
+        public static McpServerTool[] Create(ScriptCatalog scripts, CommandCatalog commands, ScriptRunManager runs, RecordingService recordings, ArtifactStore artifacts, ToolHost security)
         {
             // one guard for every tool: unexpected faults become a structured INTERNAL error
             return new McpServerTool[]
@@ -37,7 +40,7 @@ namespace sharpRPA.Mcp
                     }),
 
                 McpServerTool.Create(
-                    (string path, string mode = "full") => GetScript(scripts, path, mode),
+                    (string path, string mode = "full") => GetScript(scripts, security, path, mode),
                     new McpServerToolCreateOptions
                     {
                         Name = "get_script",
@@ -47,7 +50,7 @@ namespace sharpRPA.Mcp
                     }),
 
                 McpServerTool.Create(
-                    (string path) => ValidateScript(scripts, path),
+                    (string path) => ValidateScript(scripts, security, path),
                     new McpServerToolCreateOptions
                     {
                         Name = "validate_script",
@@ -57,7 +60,7 @@ namespace sharpRPA.Mcp
                     }),
 
                 McpServerTool.Create(
-                    (string name, string xml = null) => CreateScript(scripts, name, xml),
+                    (string name, string xml = null) => Audited(security, "create_script", name, () => CreateScript(scripts, security, name, xml)),
                     new McpServerToolCreateOptions
                     {
                         Name = "create_script",
@@ -67,7 +70,7 @@ namespace sharpRPA.Mcp
                     }),
 
                 McpServerTool.Create(
-                    (string path, string xml) => UpdateScript(scripts, path, xml),
+                    (string path, string xml) => Audited(security, "update_script", path, () => UpdateScript(scripts, security, path, xml)),
                     new McpServerToolCreateOptions
                     {
                         Name = "update_script",
@@ -99,7 +102,7 @@ namespace sharpRPA.Mcp
 
                 // ---------------------------------------------------------------- execution
                 McpServerTool.Create(
-                    (string path) => RunScript(scripts, runs, path),
+                    (string path) => Audited(security, "run_script", path, () => RunScript(scripts, runs, security, path)),
                     new McpServerToolCreateOptions
                     {
                         Name = "run_script",
@@ -139,6 +142,17 @@ namespace sharpRPA.Mcp
                     }),
 
                 McpServerTool.Create(
+                    (string status = null, int limit = Cursor.DefaultLimit, string cursor = null) =>
+                        ListRuns(runs, status, limit, cursor),
+                    new McpServerToolCreateOptions
+                    {
+                        Name = "list_runs",
+                        Description = "List script runs persisted in SQLite (newest first, survives a server restart). status may be running, succeeded, failed or cancelled. Paginated with limit/cursor.",
+                        ReadOnly = true,
+                        Idempotent = true
+                    }),
+
+                McpServerTool.Create(
                     (string runId) => ListArtifacts(artifacts, runId),
                     new McpServerToolCreateOptions
                     {
@@ -160,7 +174,7 @@ namespace sharpRPA.Mcp
 
                 // ---------------------------------------------------------------- recording
                 McpServerTool.Create(
-                    (string source, string title = null) => StartRecording(recordings, source, title),
+                    (string source, string title = null) => Audited(security, "record_start", source, () => StartRecording(recordings, source, title)),
                     new McpServerToolCreateOptions
                     {
                         Name = "record_start",
@@ -180,7 +194,7 @@ namespace sharpRPA.Mcp
                     }),
 
                 McpServerTool.Create(
-                    (string recordingId, string title = null, string scriptPath = null) => StopRecording(recordings, recordingId, title, scriptPath),
+                    (string recordingId, string title = null, string scriptPath = null) => Audited(security, "record_stop", recordingId, () => StopRecording(recordings, recordingId, title, scriptPath)),
                     new McpServerToolCreateOptions
                     {
                         Name = "record_stop",
@@ -190,7 +204,7 @@ namespace sharpRPA.Mcp
                     }),
 
                 McpServerTool.Create(
-                    (string recordingId) => AbortRecording(recordings, recordingId),
+                    (string recordingId) => Audited(security, "record_abort", recordingId, () => AbortRecording(recordings, recordingId)),
                     new McpServerToolCreateOptions
                     {
                         Name = "record_abort",
@@ -231,15 +245,98 @@ namespace sharpRPA.Mcp
                     }),
 
                 McpServerTool.Create(
-                    () => RebuildTargetIndex(recordings, scripts),
+                    () => Audited(security, "rebuild_target_index", null, () => StartRebuildIndex(security, recordings, scripts)),
                     new McpServerToolCreateOptions
                     {
                         Name = "rebuild_target_index",
-                        Description = "Rebuild the target index from every script and recording. Safe to run at any time; the index is derived data.",
+                        Description = "Start rebuilding the target index from every script and recording. Returns a jobId immediately; poll get_job for the result. Safe to re-run: the index is derived data.",
                         ReadOnly = false,
+                        Idempotent = true
+                    }),
+
+                McpServerTool.Create(
+                    (string jobId) => GetJob(security, jobId),
+                    new McpServerToolCreateOptions
+                    {
+                        Name = "get_job",
+                        Description = "Return the status of a background job started by a tool such as rebuild_index.",
+                        ReadOnly = true,
                         Idempotent = true
                     })
             }.Select(inner => (McpServerTool)new GuardedMcpServerTool(inner)).ToArray();
+        }
+
+        /// <summary>
+        /// Runs a state changing tool and writes one audit row (ok / denied / error).
+        /// </summary>
+        private static object Audited(ToolHost security, string action, string target, Func<object> body)
+        {
+            object result;
+            try
+            {
+                result = body();
+            }
+            catch (Exception ex)
+            {
+                RecordAudit(security, action, target, "error", ex.GetType().Name + ": " + ex.Message);
+                throw;
+            }
+
+            var code = ExtractErrorCode(result);
+            RecordAudit(security, action, target, code == null ? "ok" : "denied", code);
+            return result;
+        }
+
+        private static void RecordAudit(ToolHost security, string action, string target, string outcome, string detail)
+        {
+            if (security.Audit == null)
+            {
+                return;
+            }
+
+            string client = null;
+            try
+            {
+                client = security.ClientName == null ? null : security.ClientName();
+            }
+            catch (Exception)
+            {
+            }
+
+            security.Audit.Record(client, action, target, outcome, detail);
+        }
+
+        /// <summary>Returns the error code of a failure envelope, or null when the tool succeeded.</summary>
+        private static string ExtractErrorCode(object result)
+        {
+            var failure = result as CallToolResult;
+            if ((failure == null) || (failure.IsError != true))
+            {
+                return null;
+            }
+
+            try
+            {
+                var block = failure.Content == null ? null : failure.Content.FirstOrDefault() as TextContentBlock;
+                if (block == null)
+                {
+                    return "unknown";
+                }
+
+                using (var document = JsonDocument.Parse(block.Text))
+                {
+                    var root = document.RootElement;
+                    if (root.TryGetProperty("error", out var error) && error.TryGetProperty("code", out var code))
+                    {
+                        return code.GetString();
+                    }
+                }
+            }
+            catch (Exception)
+            {
+            }
+
+            return "unknown";
         }
 
         // ------------------------------------------------------------- scripts
@@ -258,7 +355,38 @@ namespace sharpRPA.Mcp
             return ToolResult.Ok(page.Item1, page.Item2);
         }
 
-        private static object GetScript(ScriptCatalog scripts, string path, string mode)
+        /// <summary>
+        /// Resolves a script path and enforces the configured script roots.
+        /// Returns null when the path is rejected; <paramref name="failure"/> then holds the error.
+        /// </summary>
+        internal static string ResolveAllowedPath(ScriptCatalog scripts, ScriptPolicy policy, string path, out object failure)
+        {
+            failure = null;
+
+            string resolved;
+            try
+            {
+                resolved = scripts.ResolvePath(path);
+            }
+            catch (ArgumentException ex)
+            {
+                failure = ToolResult.Fail(ErrorCodes.InvalidArgument, ex.Message, "Provide a script file name or path.");
+                return null;
+            }
+
+            if (policy.IsPathAllowed(resolved))
+            {
+                return resolved;
+            }
+
+            failure = ToolResult.Fail(
+                ErrorCodes.PermissionDenied,
+                "Path is outside the configured script roots: " + resolved,
+                "Allowed roots: " + policy.DescribeRoots() + ". Update sharprpa.policy.json if this is intentional.");
+            return null;
+        }
+
+        private static object GetScript(ScriptCatalog scripts, ToolHost security, string path, string mode)
         {
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -271,7 +399,13 @@ namespace sharpRPA.Mcp
                 return ToolResult.Fail(ErrorCodes.InvalidArgument, "mode must be 'full' or 'summary'.", "Use summary for large scripts to keep the response small.");
             }
 
-            var resolved = scripts.ResolvePath(path);
+            object failure;
+            var resolved = ResolveAllowedPath(scripts, security.Policy, path, out failure);
+            if (failure != null)
+            {
+                return failure;
+            }
+
             if (!File.Exists(resolved))
             {
                 return ToolResult.Fail(ErrorCodes.NotFound, "Script file not found: " + resolved, "Use list_scripts to see available scripts.");
@@ -301,14 +435,20 @@ namespace sharpRPA.Mcp
             });
         }
 
-        private static object ValidateScript(ScriptCatalog scripts, string path)
+        private static object ValidateScript(ScriptCatalog scripts, ToolHost security, string path)
         {
             if (string.IsNullOrWhiteSpace(path))
             {
                 return ToolResult.Fail(ErrorCodes.InvalidArgument, "path is required.", "Use list_scripts to see available scripts.");
             }
 
-            var resolved = scripts.ResolvePath(path);
+            object failure;
+            var resolved = ResolveAllowedPath(scripts, security.Policy, path, out failure);
+            if (failure != null)
+            {
+                return failure;
+            }
+
             if (!File.Exists(resolved))
             {
                 return ToolResult.Fail(ErrorCodes.NotFound, "Script file not found: " + resolved, "Use list_scripts to see available scripts.");
@@ -317,7 +457,7 @@ namespace sharpRPA.Mcp
             return ToolResult.Ok(scripts.ValidateScript(resolved));
         }
 
-        private static object CreateScript(ScriptCatalog scripts, string name, string xml)
+        private static object CreateScript(ScriptCatalog scripts, ToolHost security, string name, string xml)
         {
             if (string.IsNullOrWhiteSpace(name))
             {
@@ -376,7 +516,7 @@ namespace sharpRPA.Mcp
             return null;
         }
 
-        private static object UpdateScript(ScriptCatalog scripts, string path, string xml)
+        private static object UpdateScript(ScriptCatalog scripts, ToolHost security, string path, string xml)
         {
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -394,7 +534,13 @@ namespace sharpRPA.Mcp
                 return invalidXml;
             }
 
-            var resolved = scripts.ResolvePath(path);
+            object failure;
+            var resolved = ResolveAllowedPath(scripts, security.Policy, path, out failure);
+            if (failure != null)
+            {
+                return failure;
+            }
+
             if (!File.Exists(resolved))
             {
                 return ToolResult.Fail(ErrorCodes.NotFound, "Script file not found: " + resolved, "Use create_script to create it first.");
@@ -463,14 +609,20 @@ namespace sharpRPA.Mcp
 
         // ------------------------------------------------------------- execution
 
-        private static object RunScript(ScriptCatalog scripts, ScriptRunManager runs, string path)
+        private static object RunScript(ScriptCatalog scripts, ScriptRunManager runs, ToolHost security, string path)
         {
             if (string.IsNullOrWhiteSpace(path))
             {
                 return ToolResult.Fail(ErrorCodes.InvalidArgument, "path is required.", "Use list_scripts to see available scripts.");
             }
 
-            var resolved = scripts.ResolvePath(path);
+            object failure;
+            var resolved = ResolveAllowedPath(scripts, security.Policy, path, out failure);
+            if (failure != null)
+            {
+                return failure;
+            }
+
             if (!File.Exists(resolved))
             {
                 return ToolResult.Fail(ErrorCodes.NotFound, "Script file not found: " + resolved, "Use list_scripts to see available scripts.");
@@ -479,7 +631,16 @@ namespace sharpRPA.Mcp
             ScriptRunInfo run;
             try
             {
-                run = runs.Start(resolved);
+                var denied = FindDeniedCommands(scripts, security.Policy, resolved);
+                if (denied.Count > 0)
+                {
+                    return ToolResult.Fail(
+                        ErrorCodes.PermissionDenied,
+                        "Script uses denied command(s): " + string.Join(", ", denied),
+                        "Remove them or update deniedCommandTypes in sharprpa.policy.json.");
+                }
+
+                run = runs.Start(resolved, security.Policy.RunTimeoutSeconds);
             }
             catch (Exception ex) when (ex is System.Xml.XmlException || ex is InvalidOperationException)
             {
@@ -522,7 +683,7 @@ namespace sharpRPA.Mcp
             {
                 Id = run.Id,
                 Status = run.Status,
-                TotalLines = lines.Count,
+                TotalLines = run.LogLineCount > 0 ? run.LogLineCount : lines.Count,
                 Lines = tail
             });
         }
@@ -559,6 +720,31 @@ namespace sharpRPA.Mcp
                 "Run the script first; runs do not survive a server restart yet.");
         }
 
+        private static object ListRuns(ScriptRunManager runs, string status, int limit, string cursor)
+        {
+            int offset;
+            int size;
+            object failure;
+            if (!Cursor.TryStartPage(cursor, limit, out offset, out size, out failure))
+            {
+                return failure;
+            }
+
+            if (!string.IsNullOrWhiteSpace(status)
+                && Array.IndexOf(new[] { "running", "succeeded", "failed", "cancelled" }, status.Trim().ToLowerInvariant()) < 0)
+            {
+                return ToolResult.Fail(
+                    ErrorCodes.InvalidArgument,
+                    "status must be one of running, succeeded, failed, cancelled.",
+                    "Omit status to list every run.");
+            }
+
+            var items = runs.ListRuns(status, size, offset);
+            var page = Cursor.Page(runs.CountRuns(status), offset, size, items.Count);
+
+            return ToolResult.Ok(items, page);
+        }
+
         private static RunStatusResponse ToStatus(ScriptRunInfo run)
         {
             return new RunStatusResponse
@@ -570,8 +756,27 @@ namespace sharpRPA.Mcp
                 EndedAt = run.EndedAt,
                 CurrentLineNumber = run.CurrentLineNumber,
                 Error = run.Error,
-                LogLineCount = run.Log.Count
+                LogLineCount = run.LogLineCount
             };
+        }
+
+        /// <summary>Returns the denied command types used by a script, or an empty list when none are denied.</summary>
+        internal static List<string> FindDeniedCommands(ScriptCatalog scripts, ScriptPolicy policy, string path)
+        {
+            if (policy.DeniedCommandTypes.Count == 0)
+            {
+                return new List<string>();
+            }
+
+            var script = scripts.LoadScript(path);
+
+            return ScriptCatalog.Walk(script.Commands)
+                .Select(action => action.ScriptCommand)
+                .Where(command => (command != null) && !policy.IsCommandAllowed(command.GetType().Name))
+                .Select(command => command.GetType().Name)
+                .Distinct()
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
         }
 
         // ------------------------------------------------------------- artifacts
@@ -827,10 +1032,41 @@ namespace sharpRPA.Mcp
             return ToolResult.Ok(items, page);
         }
 
-        private static object RebuildTargetIndex(RecordingService recordings, ScriptCatalog scripts)
+        private static object StartRebuildIndex(ToolHost security, RecordingService recordings, ScriptCatalog scripts)
         {
-            return ToolResult.Ok(new { indexed = recordings.RebuildTargetIndex(scripts) });
+            var job = security.Jobs.Start("rebuild_index",
+                () => (object)new { indexed = recordings.RebuildTargetIndex(scripts) });
+
+            return ToolResult.Ok(new { jobId = job.Id, job.Kind, job.Status, job.StartedAt });
         }
+
+        private static object GetJob(ToolHost security, string jobId)
+        {
+            if (string.IsNullOrWhiteSpace(jobId))
+            {
+                return ToolResult.Fail(ErrorCodes.InvalidArgument, "jobId is required.", "Use the jobId returned by rebuild_target_index.");
+            }
+
+            var job = security.Jobs.Get(jobId);
+            if (job == null)
+            {
+                return ToolResult.Fail(
+                    ErrorCodes.NotFound,
+                    "Unknown job id: '" + jobId + "'.",
+                    "Jobs are process-local and disappear on restart. Jobs wrap idempotent work, so it is safe to start it again.");
+            }
+
+            return ToolResult.Ok(job);
+        }
+    }
+
+    /// <summary>Policy, audit trail and client identity shared by the mutating tools.</summary>
+    internal sealed class ToolHost
+    {
+        public ScriptPolicy Policy { get; set; } = new ScriptPolicy();
+        public AuditStore Audit { get; set; }
+        public Func<string> ClientName { get; set; }
+        public JobRegistry Jobs { get; set; } = new JobRegistry();
     }
 
     internal sealed class RunStatusResponse

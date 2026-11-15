@@ -9,7 +9,7 @@ namespace sharpRPA.Core.Storage
     /// </summary>
     public sealed class SqliteDatabase
     {
-        public const int SchemaVersion = 2;
+        public const int SchemaVersion = 3;
 
         private const string Schema = @"
 CREATE TABLE IF NOT EXISTS recording (
@@ -39,6 +39,34 @@ CREATE TABLE IF NOT EXISTS target_index (
     last_seen_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS run (
+    id           TEXT PRIMARY KEY,
+    script_path  TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    started_at   TEXT NOT NULL,
+    ended_at     TEXT,
+    current_line INTEGER,
+    error        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS run_log (
+    run_id      TEXT NOT NULL,
+    seq         INTEGER NOT NULL,
+    line_number INTEGER,
+    message     TEXT NOT NULL,
+    PRIMARY KEY (run_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS audit (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    at      TEXT NOT NULL,
+    client  TEXT,
+    action  TEXT NOT NULL,
+    target  TEXT,
+    outcome TEXT NOT NULL,
+    detail  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS artifact (
     id         TEXT PRIMARY KEY,
     run_id     TEXT NOT NULL,
@@ -55,6 +83,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_target_index
 CREATE INDEX IF NOT EXISTS ix_target_locator ON target_index(locator);
 CREATE INDEX IF NOT EXISTS ix_recording_started ON recording(started_at DESC);
 CREATE INDEX IF NOT EXISTS ix_artifact_run ON artifact(run_id, step);
+CREATE INDEX IF NOT EXISTS ix_run_started ON run(started_at DESC);
+CREATE INDEX IF NOT EXISTS ix_run_log_run ON run_log(run_id, seq);
+CREATE INDEX IF NOT EXISTS ix_audit_at ON audit(at DESC);
 ";
 
         public SqliteDatabase(string databasePath)

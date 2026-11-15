@@ -1360,6 +1360,11 @@ namespace sharpRPA.Core.AutomationCommands
             doc.LoadHtml(v_userVariableName.ConvertToUserVariable(context));
 
             var div = doc.DocumentNode.SelectSingleNode(v_xPathQuery);
+            if (div == null)
+            {
+                throw new Exception("XPath query matched no node: " + v_xPathQuery);
+            }
+
             string divString = div.InnerText;
 
             divString.StoreInUserVariable(context, v_applyToVariableName);

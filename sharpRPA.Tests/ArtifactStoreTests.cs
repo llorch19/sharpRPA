@@ -75,7 +75,7 @@ namespace sharpRPA.Tests
                 var run = manager.Start(scriptPath);
 
                 Assert.True(manager.WaitForCompletion(run.Id, TimeSpan.FromSeconds(10)));
-                Assert.Equal("Succeeded", manager.Get(run.Id).Status);
+                Assert.Equal("succeeded", manager.Get(run.Id).Status);
 
                 var log = Assert.Single(store.List(run.Id));
                 Assert.Equal("log", log.Kind);
@@ -96,7 +96,7 @@ namespace sharpRPA.Tests
                 var run = manager.Start(scriptPath);
 
                 Assert.True(manager.WaitForCompletion(run.Id, TimeSpan.FromSeconds(10)));
-                Assert.Equal("Succeeded", manager.Get(run.Id).Status);
+                Assert.Equal("succeeded", manager.Get(run.Id).Status);
             }
         }
     }

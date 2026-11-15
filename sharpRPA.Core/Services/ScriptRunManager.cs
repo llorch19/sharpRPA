@@ -32,6 +32,9 @@ namespace sharpRPA.Core.Services
         public int? CurrentLineNumber { get; set; }
         public string Error { get; set; }
         public List<string> Log { get; set; } = new List<string>();
+
+        /// <summary>Total log lines for the run; for store-backed runs this may exceed <see cref="Log"/>.</summary>
+        public int LogLineCount { get; set; }
     }
 
     /// <summary>
@@ -42,15 +45,19 @@ namespace sharpRPA.Core.Services
     {
         private const int MaxRetainedRuns = 50;
 
+        private const int MaxStoredLogLines = 5000;
+
         private readonly ConcurrentDictionary<string, ScriptRunState> runs = new ConcurrentDictionary<string, ScriptRunState>();
         private readonly ArtifactStore artifacts;
+        private readonly RunStore runStore;
 
-        public ScriptRunManager(ArtifactStore artifacts = null)
+        public ScriptRunManager(ArtifactStore artifacts = null, RunStore runStore = null)
         {
             this.artifacts = artifacts;
+            this.runStore = runStore;
         }
 
-        public ScriptRunInfo Start(string scriptPath)
+        public ScriptRunInfo Start(string scriptPath, int timeoutSeconds = 0)
         {
             if (string.IsNullOrWhiteSpace(scriptPath))
             {
@@ -62,8 +69,13 @@ namespace sharpRPA.Core.Services
 
             PruneCompletedRuns();
 
-            var state = new ScriptRunState(Guid.NewGuid().ToString("N"), scriptPath);
+            var state = new ScriptRunState(Guid.NewGuid().ToString("N"), scriptPath, timeoutSeconds);
             var runner = new ScriptRunner { CancellationToken = state.Cancellation.Token };
+
+            if (timeoutSeconds > 0)
+            {
+                state.Cancellation.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            }
 
             runner.ProgressChanged += (lineNumber, message) => state.Record(lineNumber, message);
             runner.MessageHandler = (message, title, closeAfter) =>
@@ -75,6 +87,24 @@ namespace sharpRPA.Core.Services
             state.Runner = runner;
             runs[state.Id] = state;
 
+            if (runStore != null)
+            {
+                try
+                {
+                    runStore.Insert(new RunRecord
+                    {
+                        Id = state.Id,
+                        ScriptPath = scriptPath,
+                        Status = "running",
+                        StartedAt = state.StartedAt
+                    });
+                }
+                catch (Exception)
+                {
+                    // persistence must never block a run from starting
+                }
+            }
+
             state.CompletionTask = Task.Run(() => Execute(state, runner, script));
 
             return state.Snapshot();
@@ -83,7 +113,79 @@ namespace sharpRPA.Core.Services
         public ScriptRunInfo Get(string runId)
         {
             ScriptRunState state;
-            return runs.TryGetValue(runId ?? string.Empty, out state) ? state.Snapshot() : null;
+            if (runs.TryGetValue(runId ?? string.Empty, out state))
+            {
+                return state.Snapshot();
+            }
+
+            return LoadFromStore(runId);
+        }
+
+        private ScriptRunInfo LoadFromStore(string runId)
+        {
+            if (runStore == null)
+            {
+                return null;
+            }
+
+            var record = runStore.Get(runId);
+            if (record == null)
+            {
+                return null;
+            }
+
+            return ToInfo(record, runStore.TailLog(record.Id, MaxStoredLogLines), runStore.CountLog(record.Id));
+        }
+
+        public List<ScriptRunInfo> ListRuns(string status, int limit, int offset)
+        {
+            if (runStore != null)
+            {
+                return runStore.List(status, limit, offset)
+                    .Select(record => ToInfo(record, runStore.TailLog(record.Id, 0), runStore.CountLog(record.Id)))
+                    .ToList();
+            }
+
+            return FilterMemoryRuns(status).Skip(offset).Take(limit).Select(state => state.Snapshot()).ToList();
+        }
+
+        public int CountRuns(string status)
+        {
+            return runStore != null ? runStore.Count(status) : FilterMemoryRuns(status).Count();
+        }
+
+        private IEnumerable<ScriptRunState> FilterMemoryRuns(string status)
+        {
+            var all = runs.Values.OrderByDescending(state => state.StartedAt);
+            if (string.IsNullOrWhiteSpace(status))
+            {
+                return all;
+            }
+
+            return all.Where(state => string.Equals(state.Status.ToString(), status, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static ScriptRunInfo ToInfo(RunRecord record, List<RunLogEntry> log, int logLineCount)
+        {
+            return new ScriptRunInfo
+            {
+                Id = record.Id,
+                ScriptPath = record.ScriptPath,
+                Status = record.Status,
+                StartedAt = record.StartedAt,
+                EndedAt = record.EndedAt,
+                CurrentLineNumber = record.CurrentLine,
+                Error = record.Error,
+                Log = log.Select(FormatEntry).ToList(),
+                LogLineCount = logLineCount
+            };
+        }
+
+        private static string FormatEntry(RunLogEntry entry)
+        {
+            return entry.LineNumber.HasValue
+                ? "Line " + entry.LineNumber + ": " + entry.Message
+                : entry.Message;
         }
 
         public List<ScriptRunInfo> List()
@@ -102,7 +204,7 @@ namespace sharpRPA.Core.Services
                 return false;
             }
 
-            state.Cancellation.Cancel();
+            state.RequestCancel();
             return true;
         }
 
@@ -119,33 +221,69 @@ namespace sharpRPA.Core.Services
 
         private void Execute(ScriptRunState state, ScriptRunner runner, ScriptModel script)
         {
+            ScriptRunStatus status;
+            string error = null;
+
             try
             {
                 runner.Run(script);
-                state.Complete(ScriptRunStatus.Succeeded, null);
+                status = ScriptRunStatus.Succeeded;
             }
             catch (OperationCanceledException)
             {
-                state.Complete(ScriptRunStatus.Cancelled, null);
+                if (state.TimeoutSeconds > 0 && !state.WasManuallyCancelled)
+                {
+                    // a CancelAfter expiry is a failure, not a user cancel
+                    status = ScriptRunStatus.Failed;
+                    error = "Timed out after " + state.TimeoutSeconds + "s.";
+                }
+                else
+                {
+                    status = ScriptRunStatus.Cancelled;
+                }
             }
             catch (Exception ex)
             {
-                state.Complete(ScriptRunStatus.Failed, ex.ToString());
+                status = ScriptRunStatus.Failed;
+                error = ex.ToString();
             }
-            finally
+
+            // persist before the terminal status becomes observable: a caller that sees
+            // "succeeded" must already be able to read the run back from the store
+            FlushRun(state, status, error);
+            state.Complete(status, error);
+
+            try
             {
                 // capture while browser/excel instances are still alive
                 CaptureArtifacts(state, runner);
 
-                try
-                {
-                    runner.CleanUp();
-                }
-                catch (Exception)
-                {
-                }
+                runner.CleanUp();
+            }
+            catch (Exception)
+            {
+            }
 
-                state.SignalCompletion();
+            state.SignalCompletion();
+        }
+
+        /// <summary>
+        /// Persists the final run row and its full log. Best effort: a persistence failure
+        /// must never change the run outcome the caller observes.
+        /// </summary>
+        private void FlushRun(ScriptRunState state, ScriptRunStatus status, string error)
+        {
+            if (runStore == null)
+            {
+                return;
+            }
+
+            try
+            {
+                runStore.Complete(state.ToRunRecord(status, error), state.LogEntries);
+            }
+            catch (Exception)
+            {
             }
         }
 
@@ -224,15 +362,30 @@ namespace sharpRPA.Core.Services
         private sealed class ScriptRunState
         {
             private readonly object sync = new object();
-            private readonly List<string> log = new List<string>();
+            private readonly List<RunLogEntry> log = new List<RunLogEntry>();
 
-            public ScriptRunState(string id, string scriptPath)
+            public ScriptRunState(string id, string scriptPath, int timeoutSeconds = 0)
             {
                 Id = id;
                 ScriptPath = scriptPath;
+                TimeoutSeconds = timeoutSeconds;
                 StartedAt = DateTimeOffset.Now;
                 Status = ScriptRunStatus.Running;
                 Cancellation = new CancellationTokenSource();
+            }
+
+            public int TimeoutSeconds { get; private set; }
+
+            public bool WasManuallyCancelled { get; private set; }
+
+            public void RequestCancel()
+            {
+                lock (sync)
+                {
+                    WasManuallyCancelled = true;
+                }
+
+                Cancellation.Cancel();
             }
 
             public string Id { get; private set; }
@@ -256,7 +409,35 @@ namespace sharpRPA.Core.Services
                         CurrentLineNumber = lineNumber;
                     }
 
-                    log.Add(lineNumber.HasValue ? "Line " + lineNumber + ": " + message : message);
+                    log.Add(new RunLogEntry { LineNumber = lineNumber, Message = message });
+                }
+            }
+
+            public RunRecord ToRunRecord(ScriptRunStatus status, string error)
+            {
+                lock (sync)
+                {
+                    return new RunRecord
+                    {
+                        Id = Id,
+                        ScriptPath = ScriptPath,
+                        Status = status.ToString().ToLowerInvariant(),
+                        StartedAt = StartedAt,
+                        EndedAt = DateTimeOffset.Now,
+                        CurrentLine = CurrentLineNumber,
+                        Error = error
+                    };
+                }
+            }
+
+            public List<RunLogEntry> LogEntries
+            {
+                get
+                {
+                    lock (sync)
+                    {
+                        return new List<RunLogEntry>(log);
+                    }
                 }
             }
 
@@ -283,12 +464,13 @@ namespace sharpRPA.Core.Services
                     {
                         Id = Id,
                         ScriptPath = ScriptPath,
-                        Status = Status.ToString(),
+                        Status = Status.ToString().ToLowerInvariant(),
                         StartedAt = StartedAt,
                         EndedAt = EndedAt,
                         CurrentLineNumber = CurrentLineNumber,
                         Error = Error,
-                        Log = new List<string>(log)
+                        Log = log.Select(FormatEntry).ToList(),
+                        LogLineCount = log.Count
                     };
                 }
             }

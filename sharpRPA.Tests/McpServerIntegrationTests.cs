@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using sharpRPA.Core.AutomationCommands;
+using sharpRPA.Core.Storage;
 using Xunit;
 
 namespace sharpRPA.Tests
@@ -112,6 +113,7 @@ namespace sharpRPA.Tests
                     "describe_command",
                     "find_targets",
                     "get_artifact",
+                    "get_job",
                     "get_recording",
                     "get_run_log",
                     "get_run_status",
@@ -119,6 +121,7 @@ namespace sharpRPA.Tests
                     "list_artifacts",
                     "list_commands",
                     "list_recordings",
+                    "list_runs",
                     "list_scripts",
                     "rebuild_target_index",
                     "record_abort",
@@ -324,7 +327,7 @@ namespace sharpRPA.Tests
             {
                 var statusResult = await CallAsync("get_run_status", new { runId });
                 status = ParseStatus(Data(statusResult).GetRawText());
-                if (status.Status != "Running")
+                if (status.Status != "running")
                 {
                     break;
                 }
@@ -333,11 +336,24 @@ namespace sharpRPA.Tests
             }
 
             Assert.NotNull(status);
-            Assert.Equal("Succeeded", status.Status);
+            Assert.Equal("succeeded", status.Status);
             Assert.Null(status.Error);
 
             var logResult = await CallAsync("get_run_log", new { runId, maxLines = 50 });
             Assert.Contains("Running Line", ResultText(logResult));
+
+            // the run is persisted, so it shows up in history and can be filtered by status
+            var listedRuns = await CallAsync("list_runs", new { });
+            var listedRunsRoot = Envelope(listedRuns);
+            Assert.True(listedRunsRoot.GetProperty("ok").GetBoolean(), listedRunsRoot.GetRawText());
+            Assert.Contains(runId, ResultText(listedRuns));
+
+            var succeeded = await CallAsync("list_runs", new { status = "succeeded" });
+            Assert.Contains(runId, ResultText(succeeded));
+
+            var badStatus = await CallAsync("list_runs", new { status = "nope" });
+            AssertIsError(badStatus);
+            Assert.Equal("INVALID_ARGUMENT", Envelope(badStatus).GetProperty("error").GetProperty("code").GetString());
 
             // the run log is also persisted as an artifact so the agent can read it as a file
             var artifactList = await CallAsync("list_artifacts", new { runId });
@@ -413,7 +429,39 @@ namespace sharpRPA.Tests
             Assert.Contains("xpath", targetText);
 
             var rebuild = await CallAsync("rebuild_target_index", new { });
-            Assert.Contains("indexed", ResultText(rebuild));
+            var jobId = Data(rebuild).GetProperty("jobId").GetString();
+            Assert.False(string.IsNullOrEmpty(jobId));
+            Assert.Equal("rebuild_index", Data(rebuild).GetProperty("kind").GetString());
+
+            var job = await WaitForJob(jobId);
+            Assert.Equal("succeeded", job.GetProperty("status").GetString());
+            Assert.True(job.GetProperty("result").GetProperty("indexed").GetInt32() > 0);
+
+            // only after the rebuild finished does the index reflect the recording
+            var targetsAfterRebuild = await CallAsync("find_targets", new { query = "save" });
+            Assert.Contains("ui_element", ResultText(targetsAfterRebuild));
+
+            var unknownJob = await CallAsync("get_job", new { jobId = "nope" });
+            AssertIsError(unknownJob);
+            Assert.Equal("NOT_FOUND", Envelope(unknownJob).GetProperty("error").GetProperty("code").GetString());
+        }
+
+        private async Task<JsonElement> WaitForJob(string jobId)
+        {
+            for (var attempt = 0; attempt < 100; attempt++)
+            {
+                var response = await CallAsync("get_job", new { jobId });
+                var job = Data(response);
+                if (job.GetProperty("status").GetString() != "running")
+                {
+                    return job;
+                }
+
+                await Task.Delay(20);
+            }
+
+            Assert.Fail("job did not reach a terminal state in time");
+            return default;
         }
 
         [Fact]
@@ -441,6 +489,89 @@ namespace sharpRPA.Tests
         }
 
         [Fact]
+        public async Task Resources_AreListedAndReadable()
+        {
+            var list = await RequestAsync("resources/list", new { });
+            var resources = list.GetProperty("result").GetProperty("resources").EnumerateArray()
+                .Select(resource => resource.GetProperty("uri").GetString())
+                .ToList();
+
+            Assert.Contains("sharprpa://scripts", resources);
+            Assert.Contains("sharprpa://recordings", resources);
+            // the templated script resource is advertised through resources/templates/list
+            Assert.DoesNotContain("sharprpa://script/{path}", resources);
+
+            var templates = await RequestAsync("resources/templates/list", new { });
+            var templateUris = templates.GetProperty("result").GetProperty("resourceTemplates").EnumerateArray()
+                .Select(template => template.GetProperty("uriTemplate").GetString())
+                .ToList();
+            Assert.Contains("sharprpa://script/{path}", templateUris);
+
+            var readScripts = await RequestAsync("resources/read", new { uri = "sharprpa://scripts" });
+            var scriptsText = readScripts.GetProperty("result").GetProperty("contents")[0].GetProperty("text").GetString();
+            Assert.Contains("agent-script.xml", scriptsText);
+
+            var readScript = await RequestAsync("resources/read", new { uri = "sharprpa://script/agent-script.xml" });
+            var scriptText = readScript.GetProperty("result").GetProperty("contents")[0].GetProperty("text").GetString();
+            Assert.Contains("<Script", scriptText);
+        }
+
+        [Fact]
+        public async Task Prompts_AreListedAndReturnTheirProcedure()
+        {
+            var list = await RequestAsync("prompts/list", new { });
+            var prompts = list.GetProperty("result").GetProperty("prompts").EnumerateArray()
+                .ToDictionary(
+                    prompt => prompt.GetProperty("name").GetString(),
+                    prompt => prompt.GetProperty("arguments").EnumerateArray()
+                        .Select(argument => argument.GetProperty("name").GetString()).ToList());
+
+            Assert.Equal(new[] { "optimise-script", "record-flow" }, prompts.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray());
+            Assert.Equal(new[] { "scriptPath" }, prompts["optimise-script"]);
+            Assert.Equal(new[] { "source" }, prompts["record-flow"]);
+
+            var get = await RequestAsync("prompts/get", new
+            {
+                name = "optimise-script",
+                arguments = new { scriptPath = "agent-script.xml" }
+            });
+
+            var text = get.GetProperty("result").GetProperty("messages")[0].GetProperty("content").GetProperty("text").GetString();
+            Assert.Contains("agent-script.xml", text);
+            Assert.Contains("validate_script", text);
+            Assert.Contains("update_script", text);
+        }
+
+        [Fact]
+        public async Task RunScript_OutsideTheScriptRootIsDeniedAndAudited()
+        {
+            var outside = Path.Combine(Path.GetTempPath(), "sharprpa-outside-" + Guid.NewGuid().ToString("N") + ".xml");
+            File.Copy(Path.Combine(scriptFolder.Directory, "agent-script.xml"), outside);
+
+            try
+            {
+                var result = await CallAsync("run_script", new { path = outside });
+                AssertIsError(result);
+                Assert.Equal("PERMISSION_DENIED", Envelope(result).GetProperty("error").GetProperty("code").GetString());
+
+                // the denial is on the audit trail, readable straight from the database
+                var audit = new AuditStore(new SqliteDatabase(Path.Combine(scriptFolder.Directory, "sharprpa-mcp.db")));
+                var entry = audit.List().FirstOrDefault(row => row.Action == "run_script");
+
+                Assert.NotNull(entry);
+                Assert.Equal("denied", entry.Outcome);
+                Assert.Equal("PERMISSION_DENIED", entry.Detail);
+            }
+            finally
+            {
+                if (File.Exists(outside))
+                {
+                    File.Delete(outside);
+                }
+            }
+        }
+
+        [Fact]
         public async Task CancelRun_StopsARunningScript()
         {
             // a 30s pause guarantees the run is still alive when we cancel it
@@ -460,7 +591,7 @@ namespace sharpRPA.Tests
             for (var attempt = 0; attempt < 50; attempt++)
             {
                 var status = await CallAsync("get_run_status", new { runId });
-                if (Data(status).GetProperty("status").GetString() == "Running")
+                if (Data(status).GetProperty("status").GetString() == "running")
                 {
                     break;
                 }
@@ -474,9 +605,9 @@ namespace sharpRPA.Tests
             for (var attempt = 0; attempt < 100; attempt++)
             {
                 var status = await CallAsync("get_run_status", new { runId });
-                if (Data(status).GetProperty("status").GetString() != "Running")
+                if (Data(status).GetProperty("status").GetString() != "running")
                 {
-                    Assert.Equal("Cancelled", Data(status).GetProperty("status").GetString());
+                    Assert.Equal("cancelled", Data(status).GetProperty("status").GetString());
                     return;
                 }
 

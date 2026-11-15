@@ -21,14 +21,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+    <PackageReference Include="TaskScheduler" Version="2.12.2" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="HtmlAgilityPack" Version="1.13.1" />
-    <PackageReference Include="Microsoft.Office.Interop.Excel" Version="16.0.18925.20022" />
-    <PackageReference Include="Microsoft.Playwright" Version="1.64.1" />
-    <PackageReference Include="TaskScheduler" Version="2.12.2" />
+    <ProjectReference Include="..\sharpRPA.Core\sharpRPA.Core.csproj" />
+    <ProjectReference Include="..\sharpRPA.Windows\sharpRPA.Windows.csproj" />
   </ItemGroup>
 
 </Project>

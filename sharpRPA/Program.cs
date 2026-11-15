@@ -27,6 +27,10 @@ namespace sharpRPA
         [STAThread]
         static void Main(string[] args)
         {
+            //register platform specific commands living in this assembly
+            Core.Common.RegisterCommandAssembly(typeof(Program).Assembly);
+            Core.Script.Script.RegisterKnownTypes(typeof(Program).Assembly);
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 

@@ -62,12 +62,7 @@ namespace sharpRPA.UI.Forms
                 cboSelectedCommand.DisplayMember = "DisplayValue";
 
                 //Pull all available automation commands
-                var commandClasses = Assembly.GetExecutingAssembly().GetTypes()
-                          .Where(t => t.Namespace == "sharpRPA.Core.AutomationCommands")
-                          .Where(t => t.Name != "ScriptCommand")
-                          .Where(t => t.IsAbstract == false)
-                          .Where(t => t.BaseType.Name == "ScriptCommand")
-                          .ToList();
+                var commandClasses = Core.Common.GetCommandTypes();
 
                 //Loop through each class
                 foreach (var commandClass in commandClasses)

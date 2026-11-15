@@ -1014,7 +1014,10 @@ namespace sharpRPA.UI.Forms
             //serialize script
             try
             {
-                var exportedScript = Core.Script.Script.SerializeScript(this.ScriptFilePath, lstScriptActions.Items, scriptVariables);
+                var exportedScript = Core.Script.Script.SerializeScript(
+                    this.ScriptFilePath,
+                    lstScriptActions.Items.Cast<ListViewItem>().Select(item => (Core.AutomationCommands.ScriptCommand)item.Tag),
+                    scriptVariables);
                 //show success dialog
                 Notify("File has been saved successfully!");
             }

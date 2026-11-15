@@ -36,11 +36,7 @@ namespace sharpRPA.UI.Forms
         {
             uiImages = UI.Images.UIImageDictionary();
 
-            groupedCommands = Assembly.GetExecutingAssembly().GetTypes()
-                       .Where(t => t.Namespace == "sharpRPA.Core.AutomationCommands")
-                       .Where(t => t.Name != "ScriptCommand")
-                       .Where(t => t.IsAbstract == false)
-                       .Where(t => t.BaseType.Name == "ScriptCommand")
+            groupedCommands = Core.Common.GetCommandTypes()
                        .Where(t => CommandEnabled(t))
                        .GroupBy(t => t.GetCustomAttribute(typeof(Core.AutomationCommands.Attributes.ClassAttributes.Group)))
                        .ToList();

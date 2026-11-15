@@ -14,10 +14,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Serialization;
-using System.Windows.Forms;
 using System.Xml;
 
 namespace sharpRPA.Core.Script
@@ -26,6 +26,61 @@ namespace sharpRPA.Core.Script
 
     public class Script
     {
+        private static readonly List<Type> knownCommandTypes = new List<Type>();
+        private static readonly object knownTypesLock = new object();
+
+        static Script()
+        {
+            RegisterKnownTypes(typeof(Script).Assembly);
+        }
+
+        /// <summary>
+        /// Registers every command type found in the supplied assembly so scripts can be
+        /// serialized/deserialized without compile time [XmlInclude] attributes.
+        /// </summary>
+        public static void RegisterKnownTypes(Assembly assembly)
+        {
+            if (assembly == null)
+            {
+                return;
+            }
+
+            lock (knownTypesLock)
+            {
+                foreach (var type in assembly.GetTypes())
+                {
+                    if (type.IsAbstract)
+                    {
+                        continue;
+                    }
+
+                    // XmlSerializer can only process publicly visible types
+                    if (!type.IsVisible)
+                    {
+                        continue;
+                    }
+
+                    if (!typeof(Core.AutomationCommands.ScriptCommand).IsAssignableFrom(type))
+                    {
+                        continue;
+                    }
+
+                    if (!knownCommandTypes.Contains(type))
+                    {
+                        knownCommandTypes.Add(type);
+                    }
+                }
+            }
+        }
+
+        private static XmlSerializer CreateSerializer()
+        {
+            lock (knownTypesLock)
+            {
+                return new XmlSerializer(typeof(Script), knownCommandTypes.ToArray());
+            }
+        }
+
         public List<ScriptVariable> Variables { get; set; }
 
         public List<ScriptAction> Commands;
@@ -43,7 +98,7 @@ namespace sharpRPA.Core.Script
             return newExecutionCommand;
         }
 
-        public static Script SerializeScript(string scriptFilePath, ListView.ListViewItemCollection scriptCommands, List<ScriptVariable> scriptVariables)
+        public static Script SerializeScript(string scriptFilePath, IEnumerable<Core.AutomationCommands.ScriptCommand> scriptCommands, List<ScriptVariable> scriptVariables)
         {
             //create fileStream
             var fileStream = System.IO.File.Create(scriptFilePath);
@@ -54,15 +109,14 @@ namespace sharpRPA.Core.Script
 
             script.Variables = scriptVariables;
 
-            //save listview tags to command list
+            //save commands to command list
 
             int lineNumber = 1;
 
             List<Core.Script.ScriptAction> subCommands = new List<Core.Script.ScriptAction>();
 
-            foreach (ListViewItem commandItem in scriptCommands)
+            foreach (var command in scriptCommands)
             {
-                var command = (Core.AutomationCommands.ScriptCommand)commandItem.Tag;
                 command.LineNumber = lineNumber;
 
                 if ((command is Core.AutomationCommands.BeginLoopCommand) || (command is Core.AutomationCommands.BeginIfCommand))
@@ -108,7 +162,7 @@ namespace sharpRPA.Core.Script
             }
 
             //output to xml file
-            XmlSerializer serializer = new XmlSerializer(typeof(Script));
+            XmlSerializer serializer = CreateSerializer();
             var settings = new XmlWriterSettings();
             settings.NewLineHandling = NewLineHandling.Entitize;
             settings.Indent = true;
@@ -125,7 +179,7 @@ namespace sharpRPA.Core.Script
         }
         public static Script DeserializeFile(string scriptFilePath)
         {
-            XmlSerializer serializer = new XmlSerializer(typeof(Script));
+            XmlSerializer serializer = CreateSerializer();
             System.IO.FileStream fs = new System.IO.FileStream(scriptFilePath, System.IO.FileMode.Open);
             XmlReader reader = XmlReader.Create(fs);
             Script deserializedData = (Script)serializer.Deserialize(reader);
@@ -136,7 +190,7 @@ namespace sharpRPA.Core.Script
         public static Script DeserializeXML(string scriptXML)
         {
             System.IO.StringReader reader = new System.IO.StringReader(scriptXML);
-            XmlSerializer serializer = new XmlSerializer(typeof(Script));
+            XmlSerializer serializer = CreateSerializer();
             Script deserializedData = (Script)serializer.Deserialize(reader);
             return deserializedData;
         }

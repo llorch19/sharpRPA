@@ -18,10 +18,12 @@ using System.Data;
 using System.Drawing;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml;
 using System.Xml.Serialization;
+using sharpRPA.Core.Execution;
 
 namespace sharpRPA.UI.Forms
 {
@@ -33,11 +35,10 @@ namespace sharpRPA.UI.Forms
         public string xmlInfo { get; set; }
         private System.Diagnostics.Stopwatch sw;
         public frmScriptBuilder callBackForm { get; set; }
-        public List<Core.Script.ScriptVariable> variableList { get; set; }
-
-        public Dictionary<string, object> appInstances { get; set; }
         private bool isPaused { get; set; }
-        public Core.AutomationCommands.ErrorHandlingCommand errorHandling;
+        private CancellationTokenSource runCancellation;
+        private ScriptRunner runner;
+
         public frmScriptEngine(string pathToFile, frmScriptBuilder builderForm)
         {
             filePath = pathToFile;
@@ -50,6 +51,7 @@ namespace sharpRPA.UI.Forms
             // callBackForm.websocket.Send("Running");
             this.BringToFront();
             MoveFormToBottomRight(this);
+            runCancellation = new CancellationTokenSource();
             bgwRunScript.RunWorkerAsync();
         }
 
@@ -82,80 +84,37 @@ namespace sharpRPA.UI.Forms
                 automationScript = Core.Script.Script.DeserializeXML(xmlInfo);
             }
 
-            //track variables and app instances
-            variableList = automationScript.Variables;
-
-            appInstances = new Dictionary<string, object>();
-
-            //create execution
-            foreach (var executionCommand in automationScript.Commands)
+            runner = new ScriptRunner
             {
-                if (bgwRunScript.CancellationPending)
+                CancellationToken = runCancellation.Token
+            };
+            runner.ProgressChanged += (lineNumber, message) =>
+                bgwRunScript.ReportProgress(0, new object[] { lineNumber, message });
+            runner.MessageHandler = (message, title, closeAfter) =>
+            {
+                if (IsDisposed || !IsHandleCreated)
                 {
-                    e.Cancel = true;
-                    return;
+                    return true;
                 }
 
-                ExecuteCommand(executionCommand, bgwRunScript);
-            }
-        }
-
-        public void ExecuteCommand(Core.Script.ScriptAction command, BackgroundWorker bgw)
-        {
-            //get command
-            Core.AutomationCommands.ScriptCommand parentCommand = command.ScriptCommand;
-
-            //handle pause
-            while (isPaused)
+                return (bool)Invoke(new Func<bool>(() =>
+                    ShowMessage(message, title, UI.Forms.Supplemental.frmDialog.DialogType.OkOnly, closeAfter)));
+            };
+            runner.PauseHandler = () =>
             {
-                System.Threading.Thread.Sleep(2000);
-            }
+                while (isPaused && !runner.CancellationToken.IsCancellationRequested)
+                {
+                    System.Threading.Thread.Sleep(200);
+                }
+            };
 
-            //bypass comments
-            if (parentCommand is Core.AutomationCommands.CommentCommand || parentCommand.IsCommented)
-            {
-                bgwRunScript.ReportProgress(0, new object[] { parentCommand.LineNumber, "Skipping Line " + parentCommand.LineNumber + ": " + parentCommand.GetDisplayValue() });
-                return;
-            }
-
-            //update listbox
-            bgwRunScript.ReportProgress(0, new object[] { parentCommand.LineNumber, "Running Line " + parentCommand.LineNumber + ": " + parentCommand.GetDisplayValue() });
-
-            //handle any errors
             try
             {
-                //determine type of command
-                if ((parentCommand is Core.AutomationCommands.BeginLoopCommand) || (parentCommand is Core.AutomationCommands.BeginIfCommand))
-                {
-                    //run the command and pass bgw/command as this command will recursively call this method for sub commands
-                    parentCommand.RunCommand(this, command, bgw);
-                }
-                else
-                {
-                    //run the command
-                    parentCommand.RunCommand(this);
-                }
+                runner.Run(automationScript);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
             {
-                //error occuured so decide what user selected
-                if (errorHandling != null)
-                {
-                    switch (errorHandling.v_ErrorHandlingAction)
-                    {
-                        case "Continue Processing":
-                            bgwRunScript.ReportProgress(0, new object[] { parentCommand.LineNumber, "Error Occured at Line " + parentCommand.LineNumber + ":" + ex.ToString() });
-                            bgwRunScript.ReportProgress(0, new object[] { parentCommand.LineNumber, "Continuing Per Error Handling" });
-                            break;
-
-                        default:
-                            throw new Exception(ex.ToString());
-                    }
-                }
-                else
-                {
-                    throw new Exception(ex.ToString());
-                }
+                e.Cancel = true;
             }
         }
 
@@ -175,7 +134,10 @@ namespace sharpRPA.UI.Forms
             sw.Stop();
 
             //dispose of any unnecessary application instances
-            CleanUpMemory();
+            if (runner != null)
+            {
+                runner.CleanUp();
+            }
 
             //reset debug line
             if (callBackForm != null)
@@ -214,39 +176,6 @@ namespace sharpRPA.UI.Forms
             //callBackForm.websocket.Send("Available");
         }
 
-        private void CleanUpMemory()
-        {
-            foreach (var browserSession in appInstances.Values.OfType<Core.BrowserSession>())
-            {
-                try
-                {
-                    browserSession.Dispose();
-                }
-                catch (Exception)
-                {
-                }
-            }
-
-            foreach (var excelApplication in appInstances.Values.OfType<Microsoft.Office.Interop.Excel.Application>())
-            {
-                try
-                {
-                    excelApplication.Quit();
-                    System.Runtime.InteropServices.Marshal.FinalReleaseComObject(excelApplication);
-                }
-                catch (Exception)
-                {
-                }
-            }
-
-            appInstances.Clear();
-        }
-
-        public void ReportProgress(string progressToReport)
-        {
-            bgwRunScript.ReportProgress(0, new object[] { null, "Command Report: " + progressToReport });
-        }
-
         #endregion BackgroundWorker
 
         #region UI Elements
@@ -280,6 +209,7 @@ namespace sharpRPA.UI.Forms
             lstSteppingCommands.Items.Add("[User Requested Cancellation]");
             lstSteppingCommands.SelectedIndex = lstSteppingCommands.Items.Count - 1;
             lblMainLogo.Text = "debug info (cancelling)";
+            runCancellation?.Cancel();
             bgwRunScript.CancelAsync();
         }
 
@@ -307,8 +237,13 @@ namespace sharpRPA.UI.Forms
 
         private void frmScriptEngine_FormClosing(object sender, FormClosingEventArgs e)
         {
+            runCancellation?.Cancel();
+
             //dispose of any unnecessary application instances
-            CleanUpMemory();
+            if (runner != null)
+            {
+                runner.CleanUp();
+            }
         }
     }
 }

@@ -2,6 +2,17 @@
 
 本文整理当前架构、目标架构，以及 Avalonia、MCP、Agent 自动记录/回放三项能力的可行性和实施顺序。
 
+## 0. 当前进度
+
+| 阶段 | 状态 | 说明 |
+| --- | --- | --- |
+| Phase 0 Core 解耦 | ✅ 完成 | 拆出 `sharpRPA.Core`（`net10.0`，无平台依赖）与 `sharpRPA.Windows`；命令改为 `IScriptExecutionContext`，`ScriptRunner` 支持无头执行、取消、暂停、进度、清理回调 |
+| 录制事件边界 | ✅ 完成 | `RecordedAction` / `IRecordingSink` / `InMemoryRecordingSink`，浏览器与桌面录制共用 |
+| 可测试性 | ✅ 完成 | `sharpRPA.Tests` 59 个用例，跨平台运行（含真实 sample 脚本往返、MCP 进程级集成测试） |
+| Phase 1 MCP | ✅ 完成 | `sharpRPA.Mcp` stdio server，9 个工具，跨平台腿 + Windows 全命令腿 |
+| Phase 2 自动录制 | ⬜ 未开始 | 浏览器 Playwright recorder、Windows UIA 录制 |
+| Phase 3 Avalonia | ⬜ 未开始 | 视产品需要 |
+
 ## 1. 结论
 
 | 方向 | 可行性 | 优先级 | 判断 |
@@ -13,9 +24,9 @@
 
 当前技术栈：
 
-- .NET 10，目标框架 `net10.0-windows10.0.19041.0`。
+- .NET 10。`sharpRPA.Core` 目标 `net10.0`，UI 与 Windows 命令层目标 `net10.0-windows10.0.19041.0`。
 - WinForms UI，约 15 个视图、47 个 UI 文件。
-- 46 个 `ScriptCommand` 命令类。
+- 46 个 `ScriptCommand` 命令类：25 个跨平台（Core），21 个 Windows 专属（Windows 层）。
 - 浏览器自动化已迁移到 Microsoft Playwright 1.64.1。
 - 脚本格式为 XML，通过 `XmlSerializer` 序列化。
 - Windows 专属能力：Win32 窗口/键鼠、UIAutomation、Excel Interop、WinRT OCR、Task Scheduler。
@@ -84,47 +95,51 @@ flowchart TB
     CrossPlatform --> Linux[Linux AT-SPI]
 ```
 
-建议项目结构：
+项目结构（已落地）：
 
 ```text
-sharpRPA.Core
-sharpRPA.Automation.Abstractions
-sharpRPA.Automation.Windows
-sharpRPA.Automation.Playwright
-sharpRPA.Runner
-sharpRPA.Mcp
-sharpRPA.Cli
-sharpRPA.Desktop.Avalonia
-sharpRPA.Desktop.WinForms
+sharpRPA.Core        net10.0           Script、ScriptRunner、Execution、Recording、Services、25 个跨平台命令
+sharpRPA.Windows     net10.0-windows   Win32、UI Automation、Excel、OCR 等 21 个 Windows 命令
+sharpRPA             net10.0-windows   WinForms UI（引用 Core + Windows）
+sharpRPA.Mcp         net10.0 (+win)    MCP stdio server（跨平台腿 + Windows 全命令腿）
+sharpRPA.Tests       net10.0           xUnit，任意平台可跑
 ```
 
-关键抽象：
+后续可选拆分：
+
+```text
+sharpRPA.Cli
+sharpRPA.Desktop.Avalonia
+```
+
+关键抽象（实际实现）：
 
 ```csharp
 public interface IScriptExecutionContext
 {
-    IReadOnlyDictionary<string, object> AppInstances { get; }
-    IReadOnlyList<ScriptVariable> Variables { get; }
+    List<ScriptVariable> Variables { get; }
+    Dictionary<string, object> AppInstances { get; }
+    ErrorHandlingCommand ErrorHandling { get; set; }
     CancellationToken CancellationToken { get; }
-    void ReportProgress(int lineNumber, string message);
-    void ShowMessage(string message, string title);
-    string Resolve(string value);
-    void Store(string variableName, object value);
-}
+    bool IsCancellationPending { get; }
+    IRecordingSink Recorder { get; }
 
-public interface IScriptRunner
-{
-    Task<ScriptRunResult> RunAsync(Script script, IScriptExecutionContext context);
+    void ReportProgress(int? lineNumber, string message);
+    void ReportProgress(string message);
+    bool ShowMessage(string message, string title, int closeAfter = 0);
+    void ExecuteCommand(ScriptAction command);
+    void WaitIfPaused();
+    void RegisterCleanup(Action cleanup);
 }
 ```
 
-`ScriptRunner` 应提供：
+`ScriptRunner` 提供：
 
-- 运行 ID、状态和结构化日志。
-- 取消、暂停、单步执行。
-- 产物目录：截图、Playwright trace、录制数据、错误信息。
-- 超时和重试策略。
-- 失败时的步骤快照和上下文变量快照。
+- 执行、注释跳过、错误策略（Stop/Continue）、取消、暂停钩子。
+- 进度事件与无头消息回调（MCP 用日志代替弹窗）。
+- 资源清理：`IDisposable` 实例 + `RegisterCleanup` 注册的回调（如 Excel 退出）。
+
+`ScriptRunManager`（Core 服务）在此之上提供运行 ID、状态、结构化日志与取消，供 MCP/CLI 复用。
 
 ## 4. Avalonia 评估
 

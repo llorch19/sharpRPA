@@ -16,6 +16,63 @@ Browser automation uses Microsoft Playwright. Install the Chromium browser befor
 pwsh sharpRPA/bin/Debug/net10.0-windows10.0.19041.0/playwright.ps1 install chromium
 ```
 
+# Projects
+
+| Project | Target | Purpose |
+| --- | --- | --- |
+| `sharpRPA.Core` | `net10.0` | UI-free engine: script model, `ScriptRunner`, cross-platform commands, recording contracts, catalog/run services |
+| `sharpRPA.Windows` | `net10.0-windows` | Windows-only commands: Win32, UI Automation, Excel, OCR, screenshot, clipboard |
+| `sharpRPA` | `net10.0-windows` | WinForms script builder and debug runner |
+| `sharpRPA.Mcp` | `net10.0` + `net10.0-windows` | MCP stdio server for AI agents |
+| `sharpRPA.Tests` | `net10.0` | xUnit tests, runs on any OS |
+
+# Tests
+
+```
+dotnet test sharpRPA.sln
+```
+
+The suite covers script execution, validation, command discovery, script
+serialization against the shipped sample scripts, and drives the real MCP
+server as a child process over JSON-RPC.
+
+# MCP Server
+
+`sharpRPA.Mcp` exposes scripts, the command catalogue and headless execution
+to AI agents over MCP (stdio).
+
+```
+# cross-platform commands only (browser, HTTP, variables, flow control)
+dotnet run --project sharpRPA.Mcp -f net10.0
+
+# full command set including window/UI Automation/Excel/OCR (Windows)
+dotnet run --project sharpRPA.Mcp -f net10.0-windows10.0.19041.0
+```
+
+Tools: `list_scripts`, `get_script`, `validate_script`, `list_commands`,
+`describe_command`, `run_script`, `get_run_status`, `get_run_log`, `cancel_run`.
+
+Environment variables:
+
+- `SHARPRPA_SCRIPT_DIR` — script folder to serve (defaults to `Documents\sharpRPA\My Scripts`).
+
+Register it in opencode:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "sharprpa": {
+      "type": "local",
+      "command": ["dotnet", "run", "--project", "sharpRPA.Mcp", "-f", "net10.0"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Restart opencode after saving the config.
+
 # Start Screen
 ![Main App Window](https://i.imgur.com/GkYEivM.png)
 

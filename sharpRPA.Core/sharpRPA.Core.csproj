@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>sharpRPA.Core</RootNamespace>
+    <AssemblyName>sharpRPA.Core</AssemblyName>
+    <Version>0.0.9</Version>
+    <Product>sharpRPA</Product>
+    <Description>UI-free automation engine, commands and script model</Description>
+    <Copyright>Copyright © 2017</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="HtmlAgilityPack" Version="1.13.1" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.64.1" />
+  </ItemGroup>
+
+</Project>

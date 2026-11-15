@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>sharpRPA.Windows</RootNamespace>
+    <AssemblyName>sharpRPA.Windows</AssemblyName>
+    <NoWarn>$(NoWarn);WFO1000</NoWarn>
+    <Version>0.0.9</Version>
+    <Product>sharpRPA</Product>
+    <Description>Windows-only automation commands (Win32, UI Automation, Excel, OCR)</Description>
+    <Copyright>Copyright © 2017</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Office.Interop.Excel" Version="16.0.18925.20022" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\sharpRPA.Core\sharpRPA.Core.csproj" />
+  </ItemGroup>
+
+</Project>

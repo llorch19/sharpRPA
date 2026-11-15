@@ -11,7 +11,6 @@
 //WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //See the License for the specific language governing permissions and
 //limitations under the License.
-using SHDocVw;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -231,18 +230,7 @@ namespace sharpRPA.UI.Forms
                 }
 
                 //these types get a helper button to launch another form
-                if (inputField.Name == "v_WebSearchTable")
-                {
-                    Core.AutomationCommands.IEBrowserElementCommand webCommand = (Core.AutomationCommands.IEBrowserElementCommand)currentCommand;
-                    sharpRPA.UI.CustomControls.CommandItemControl newitm = new sharpRPA.UI.CustomControls.CommandItemControl();
-
-                    newitm.CommandImage = UI.Images.GetUIImage(webCommand.CommandName);
-                    newitm.CommandDisplay = "Click here to Capture Web Element";
-                    newitm.ForeColor = Color.Black;
-                    newitm.Click += ShowElementCaptureForm;
-                    flw_InputVariables.Controls.Add(newitm);
-                }
-                else if (inputField.Name == "v_XMousePosition")
+                if (inputField.Name == "v_XMousePosition")
                 {
                     Core.AutomationCommands.SendMouseMoveCommand mouseCommand = (Core.AutomationCommands.SendMouseMoveCommand)currentCommand;
                     sharpRPA.UI.CustomControls.CommandItemControl newitm = new sharpRPA.UI.CustomControls.CommandItemControl();
@@ -274,19 +262,6 @@ namespace sharpRPA.UI.Forms
                         DataGridView inputCtrl = (DataGridView)inputControl;
                         inputCtrl.Rows[1].Cells[1] = comparisonComboBox;
                     }
-                }
-            }
-
-            if ((currentCommand is Core.AutomationCommands.IEBrowserElementCommand) && (creationMode == CreationMode.Edit))
-            {
-                Core.AutomationCommands.IEBrowserElementCommand webCommand = (Core.AutomationCommands.IEBrowserElementCommand)currentCommand;
-
-                if (webCommand.v_WebAction == "Invoke Click")
-                {
-                    DataGridView webActionParameterBox = (DataGridView)flw_InputVariables.Controls["v_WebActionParameterTable"];
-                    Label additionalParameterLabel = (Label)flw_InputVariables.Controls["lbl_v_WebActionParameterTable"];
-                    additionalParameterLabel.Visible = false;
-                    webActionParameterBox.Visible = false;
                 }
             }
 
@@ -419,23 +394,6 @@ namespace sharpRPA.UI.Forms
                     InputControl.Items.Add("Middle Up");
                     InputControl.Items.Add("Right Up");
                 }
-                else if (inputField.Name == "v_WebAction")
-                {
-                    InputControl = new ComboBox();
-                    InputControl.Height = 30;
-                    InputControl.Width = 300;
-
-                    InputControl.Items.Add("Invoke Click");
-                    InputControl.Items.Add("Left Click");
-                    InputControl.Items.Add("Middle Click");
-                    InputControl.Items.Add("Right Click");
-
-                    InputControl.Items.Add("Get Attribute");
-                    InputControl.Items.Add("Set Attribute");
-
-                    ComboBox webAction = (ComboBox)InputControl;
-                    webAction.SelectedIndexChanged += webAction_SelectionChangeCommitted;
-                }
                 else if ((inputField.Name == "v_userVariableName") || (inputField.Name == "v_applyToVariableName"))
                 {
                     InputControl = new ComboBox();
@@ -469,13 +427,7 @@ namespace sharpRPA.UI.Forms
 
                     //set datasource
 
-                    if (currentCommand is Core.AutomationCommands.IEBrowserElementCommand)
-                    {
-                        var cmd = (Core.AutomationCommands.IEBrowserElementCommand)currentCommand;
-                        InputControl.DataSource = cmd.v_WebActionParameterTable;
-                        InputControl.Font = new Font("Segoe UI", 8, FontStyle.Regular);
-                    }
-                    else if (currentCommand is Core.AutomationCommands.SeleniumBrowserElementActionCommand)
+                    if (currentCommand is Core.AutomationCommands.SeleniumBrowserElementActionCommand)
                     {
                         var cmd = (Core.AutomationCommands.SeleniumBrowserElementActionCommand)currentCommand;
                         InputControl.DataSource = cmd.v_WebActionParameterTable;
@@ -486,19 +438,6 @@ namespace sharpRPA.UI.Forms
                         var cmd = (Core.AutomationCommands.BeginIfCommand)currentCommand;
                         InputControl.DataSource = cmd.v_IfActionParameterTable;
                         InputControl.Font = new Font("Segoe UI", 8, FontStyle.Regular);
-                    }
-                }
-                else if (inputField.Name == "v_IEBrowserName")
-                {
-                    InputControl = new ComboBox();
-                    InputControl.Width = 300;
-                    InputControl.Height = 50;
-
-                    var shellWindows = new ShellWindows();
-                    foreach (IWebBrowser2 shellWindow in shellWindows)
-                    {
-                        if (shellWindow.Document is MSHTML.HTMLDocument)
-                            InputControl.Items.Add(shellWindow.Document.Title);
                     }
                 }
                 else if (inputField.Name == "v_Comment")
@@ -518,37 +457,6 @@ namespace sharpRPA.UI.Forms
                     }
 
                     InputControl.Multiline = true;
-                }
-                else if (inputField.Name == "v_WebSearchTable")
-                {
-                    InputControl = new DataGridView();
-
-                    InputControl.Name = inputField.Name;
-                    InputControl.Width = 400;
-                    InputControl.Height = 180;
-
-                    InputControl.AutoGenerateColumns = false;
-                    DataGridViewCheckBoxColumn enabledColumn = new DataGridViewCheckBoxColumn();
-                    enabledColumn.HeaderText = "Enabled";
-                    enabledColumn.DataPropertyName = "Enabled";
-                    InputControl.Columns.Add(enabledColumn);
-
-                    DataGridViewTextBoxColumn propertyName = new DataGridViewTextBoxColumn();
-                    propertyName.HeaderText = "Property Name";
-                    propertyName.DataPropertyName = "Property Name";
-                    InputControl.Columns.Add(propertyName);
-
-                    DataGridViewTextBoxColumn propertyValue = new DataGridViewTextBoxColumn();
-                    propertyValue.HeaderText = "Property Value";
-                    propertyValue.DataPropertyName = "Property Value";
-                    InputControl.Columns.Add(propertyValue);
-
-                    InputControl.AutoSizeColumnsMode = System.Windows.Forms.DataGridViewAutoSizeColumnsMode.Fill;
-
-                    //set datasource
-                    var cmd = (Core.AutomationCommands.IEBrowserElementCommand)currentCommand;
-                    InputControl.DataSource = cmd.v_WebSearchTable;
-                    InputControl.Font = new Font("Segoe UI", 8, FontStyle.Regular);
                 }
                 else
                 {
@@ -577,67 +485,6 @@ namespace sharpRPA.UI.Forms
         #region ComboBox Events
 
         //handles all combobox events
-        private void webAction_SelectionChangeCommitted(object sender, EventArgs e)
-        {
-            ComboBox webAction = (ComboBox)sender;
-            DataGridView webActionParameterBox = (DataGridView)flw_InputVariables.Controls["v_WebActionParameterTable"];
-            Label additionalParameterLabel = (Label)flw_InputVariables.Controls["lbl_v_WebActionParameterTable"];
-
-            if ((webActionParameterBox == null) || (webAction == null) || (webActionParameterBox.DataSource == null))
-                return;
-
-            Core.AutomationCommands.IEBrowserElementCommand cmd = (Core.AutomationCommands.IEBrowserElementCommand)selectedCommand;
-            DataTable actionParameters = cmd.v_WebActionParameterTable;
-            actionParameters.Rows.Clear();
-
-            switch (webAction.Text)
-            {
-                case "Invoke Click":
-                    additionalParameterLabel.Visible = false;
-                    webActionParameterBox.Visible = false;
-                    break;
-
-                case "Left Click":
-                case "Middle Click":
-                case "Right Click":
-                    additionalParameterLabel.Visible = true;
-                    webActionParameterBox.Visible = true;
-                    actionParameters.Rows.Add("X Adjustment", 0);
-                    actionParameters.Rows.Add("Y Adjustment", 0);
-                    break;
-
-                case "Set Attribute":
-                    additionalParameterLabel.Visible = true;
-                    webActionParameterBox.Visible = true;
-                    actionParameters.Rows.Add("Attribute Name");
-                    actionParameters.Rows.Add("Value To Set");
-
-                    break;
-
-                case "Get Attribute":
-                    additionalParameterLabel.Visible = true;
-                    webActionParameterBox.Visible = true;
-                    actionParameters.Rows.Add("Attribute Name");
-                    actionParameters.Rows.Add("Variable Name");
-
-                    //DataGridViewComboBoxCell getAttributeComboBox = new DataGridViewComboBoxCell();
-                    //getAttributeComboBox.Items.Add("innerText");
-                    //webActionParameterBox.Rows[0].Cells[1] = getAttributeComboBox;
-
-                    //DataGridViewComboBoxCell variableComboBox = new DataGridViewComboBoxCell();
-                    //scriptVariables.Where(x => !string.IsNullOrEmpty(x.variableName)).ToList().ForEach(x => variableComboBox.Items.Add(x.variableName));
-                    //webActionParameterBox.Rows[1].Cells[1] = variableComboBox;
-
-                    break;
-
-                default:
-                    break;
-            }
-
-            //AutomationCommands.WebBrowserElementCommand cmd = (AutomationCommands.WebBrowserElementCommand)selectedCommand;
-            //webActionParameterBox.DataSource = actionParameters;
-            //cmd.v_WebSearchTable = actionParameters;
-        }
         private void ifAction_SelectionChangeCommitted(object sender, EventArgs e)
         {
             ComboBox ifAction = (ComboBox)sender;
@@ -827,27 +674,6 @@ namespace sharpRPA.UI.Forms
 
         //handles forms to help capture additional details
 
-        private void ShowElementCaptureForm(object sender, EventArgs e)
-        {
-            sharpRPA.UI.Forms.Supplemental.frmBrowserElementBuilder frmElementBuilder = new sharpRPA.UI.Forms.Supplemental.frmBrowserElementBuilder();
-            if (frmElementBuilder.ShowDialog() == DialogResult.OK)
-            {
-                Core.AutomationCommands.IEBrowserElementCommand cmd = (Core.AutomationCommands.IEBrowserElementCommand)selectedCommand;
-                DataTable searchParameterTable = (DataTable)frmElementBuilder.dgvSearchParameters.DataSource;
-
-                if (searchParameterTable == null)
-                {
-                    return;
-                }
-
-                searchParameterTable.TableName = "WebSearchParamTable" + DateTime.Now.ToString("MMddyy.hhmmss");
-                DataGridView dgvSearchView = (DataGridView)flw_InputVariables.Controls["v_WebSearchTable"];
-                dgvSearchView.DataSource = searchParameterTable;
-                cmd.v_WebSearchTable = searchParameterTable;
-            }
-
-            ShowAllForms();
-        }
         public static void ShowAllForms()
         {
             foreach (Form frm in Application.OpenForms)

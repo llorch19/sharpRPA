@@ -216,25 +216,30 @@ namespace sharpRPA.UI.Forms
 
         private void CleanUpMemory()
         {
-            //close out app sessions here eventually
+            foreach (var browserSession in appInstances.Values.OfType<Core.BrowserSession>())
+            {
+                try
+                {
+                    browserSession.Dispose();
+                }
+                catch (Exception)
+                {
+                }
+            }
 
-            //foreach (var kvp in appInstances)
-            //{
-            //    try
-            //    {
-            //        if (kvp.Value is OpenQA.Selenium.Chrome.ChromeDriver)
-            //        {
-            //            OpenQA.Selenium.Chrome.ChromeDriver driver = (OpenQA.Selenium.Chrome.ChromeDriver)kvp.Value;
-            //            driver.Quit();
-            //            driver.Dispose();
-            //        }
-            //    }
-            //    catch (Exception)
-            //    {
-            //        //should we throw an exception?
-            //    }
+            foreach (var excelApplication in appInstances.Values.OfType<Microsoft.Office.Interop.Excel.Application>())
+            {
+                try
+                {
+                    excelApplication.Quit();
+                    System.Runtime.InteropServices.Marshal.FinalReleaseComObject(excelApplication);
+                }
+                catch (Exception)
+                {
+                }
+            }
 
-            //}
+            appInstances.Clear();
         }
 
         public void ReportProgress(string progressToReport)

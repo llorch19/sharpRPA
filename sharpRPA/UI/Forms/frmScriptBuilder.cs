@@ -11,7 +11,6 @@
 //WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //See the License for the specific language governing permissions and
 //limitations under the License.
-using SuperSocket.ClientEngine;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -42,7 +41,8 @@ namespace sharpRPA.UI.Forms
         private List<Core.Script.ScriptVariable> scriptVariables;
 
         private ImageList uiImages;
-        private WebSocket4Net.WebSocket webSocket;
+        private ClientWebSocket webSocket;
+        private System.Threading.CancellationTokenSource webSocketCancellation;
         private string webSocketConnectionID;
         public Core.ApplicationSettings appSettings;
         private string streamedXMLData { get; set; }
@@ -1136,16 +1136,18 @@ namespace sharpRPA.UI.Forms
 
         #region WebServer Socket Management
 
-        public void CreateSocketConnection(string serverURL)
+        public async void CreateSocketConnection(string serverURL)
         {
             try
             {
-                webSocket = new WebSocket4Net.WebSocket(serverURL);
-                webSocket.Error += new EventHandler<SuperSocket.ClientEngine.ErrorEventArgs>(ConnectionError);
-                webSocket.Opened += new EventHandler(ConnectionOpened);
-                webSocket.Closed += new EventHandler(ConnectionClosed);
-                webSocket.MessageReceived += new EventHandler<WebSocket4Net.MessageReceivedEventArgs>(websocket_MessageReceived);
-                webSocket.Open();
+                webSocketCancellation?.Cancel();
+                webSocket?.Dispose();
+
+                webSocket = new ClientWebSocket();
+                webSocketCancellation = new System.Threading.CancellationTokenSource();
+                await webSocket.ConnectAsync(new Uri(serverURL), webSocketCancellation.Token);
+                ConnectionOpened();
+                _ = ReceiveWebSocketMessages(webSocket, webSocketCancellation.Token);
             }
             catch (Exception ex)
             {
@@ -1154,38 +1156,93 @@ namespace sharpRPA.UI.Forms
         }
 
 
-        public void SendMessage(string message)
+        public async void SendMessage(string message)
         {
-            webSocket.Send(message);
+            try
+            {
+                await SendWebSocketMessage(message);
+            }
+            catch (Exception ex)
+            {
+                Notify("Server Connection Problem: " + ex.Message);
+            }
         }
 
-        private void ConnectionOpened(object sender, EventArgs e)
+        private async Task SendWebSocketMessage(string message)
         {
-            webSocket.Send("ClientStatus=Available");
+            if (webSocket == null || webSocket.State != WebSocketState.Open)
+            {
+                return;
+            }
+
+            byte[] messageBytes = Encoding.UTF8.GetBytes(message);
+            await webSocket.SendAsync(new ArraySegment<byte>(messageBytes), WebSocketMessageType.Text, true, webSocketCancellation?.Token ?? System.Threading.CancellationToken.None);
         }
-        private void ConnectionClosed(object sender, EventArgs e)
+
+        private async Task ReceiveWebSocketMessages(ClientWebSocket socket, System.Threading.CancellationToken cancellationToken)
+        {
+            var buffer = new byte[4096];
+            var messageBuilder = new StringBuilder();
+
+            try
+            {
+                while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+                {
+                    var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, cancellationToken);
+                        break;
+                    }
+
+                    messageBuilder.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+
+                    if (result.EndOfMessage)
+                    {
+                        string message = messageBuilder.ToString();
+                        messageBuilder.Clear();
+                        websocket_MessageReceived(message);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (WebSocketException)
+            {
+            }
+            catch (Exception ex)
+            {
+                Notify("Server Connection Problem: " + ex.Message);
+            }
+            finally
+            {
+                ConnectionClosed();
+            }
+        }
+
+        private void ConnectionOpened()
+        {
+            SendMessage("ClientStatus=Available");
+        }
+        private void ConnectionClosed()
         {
             //start retrying to connect
         }
 
-        private void ConnectionError(object sender, SuperSocket.ClientEngine.ErrorEventArgs e)
+        private void websocket_MessageReceived(string message)
         {
-            //connection has failed, start retrying
-        }
-        private void websocket_MessageReceived(object sender, WebSocket4Net.MessageReceivedEventArgs e)
-        {
-
-
-            if (e.Message.Contains("connectionID"))
+            if (message.Contains("connectionID"))
             {
                 //set connection ID to display locally
-                webSocketConnectionID = e.Message;
-                UpdateServerConnectionInfo(e.Message);
+                webSocketConnectionID = message;
+                UpdateServerConnectionInfo(message);
             }
-            else if (e.Message.Contains("?xml"))
+            else if (message.Contains("?xml"))
             {
                 //code is being sent from the server so run it
-                streamedXMLData = e.Message;
+                streamedXMLData = message;
                 RunXMLScript();
             }
         }

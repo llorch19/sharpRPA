@@ -33,23 +33,22 @@ namespace sharpRPA.Core
         /// </summary>
         public static T Clone<T>(T source)
         {
-            if (!typeof(T).IsSerializable)
-            {
-                throw new ArgumentException("The type must be serializable.", "source");
-            }
-
             if (Object.ReferenceEquals(source, null))
             {
                 return default(T);
             }
 
-            System.Runtime.Serialization.IFormatter formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter();
-            Stream stream = new MemoryStream();
-            using (stream)
+            if (source is DataTable dataTable)
             {
-                formatter.Serialize(stream, source);
+                return (T)(object)dataTable.Copy();
+            }
+
+            var serializer = new XmlSerializer(source.GetType());
+            using (var stream = new MemoryStream())
+            {
+                serializer.Serialize(stream, source);
                 stream.Seek(0, SeekOrigin.Begin);
-                return (T)formatter.Deserialize(stream);
+                return (T)serializer.Deserialize(stream);
             }
         }
         /// <summary>

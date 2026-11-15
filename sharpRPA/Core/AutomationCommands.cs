@@ -18,14 +18,17 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Serialization;
 using System.Runtime.InteropServices;
-using SHDocVw;
 using System.Data;
-using MSHTML;
 using System.Windows.Automation;
+using Microsoft.Playwright;
 using System.Net.Mail;
 using sharpRPA.Core;
 using System.Net;
 using System.IO;
+using Windows.Globalization;
+using Windows.Graphics.Imaging;
+using Windows.Media.Ocr;
+using Windows.Storage;
 
 namespace sharpRPA.Core.AutomationCommands
 {
@@ -47,11 +50,6 @@ namespace sharpRPA.Core.AutomationCommands
     [XmlInclude(typeof(VariableCommand))]
     [XmlInclude(typeof(RunScriptCommand))]
     [XmlInclude(typeof(CloseWindowCommand))]
-    [XmlInclude(typeof(IEBrowserCreateCommand))]
-    [XmlInclude(typeof(IEBrowserNavigateCommand))]
-    [XmlInclude(typeof(IEBrowserCloseCommand))]
-    [XmlInclude(typeof(IEBrowserElementCommand))]
-    [XmlInclude(typeof(IEBrowserFindBrowserCommand))]
     [XmlInclude(typeof(SetWindowStateCommand))]
     [XmlInclude(typeof(BeginLoopCommand))]
     [XmlInclude(typeof(EndLoopCommand))]
@@ -130,440 +128,14 @@ namespace sharpRPA.Core.AutomationCommands
 
     #endregion Base Command
 
-    #region Legacy IE Web Commands
 
-    [Serializable]
-    [Attributes.ClassAttributes.Group("IE Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to create a new IE web browser session.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements the 'InternetExplorer' application object from SHDocVw.dll to achieve automation.")]
-    public class IEBrowserCreateCommand : ScriptCommand
-    {
-        [XmlAttribute]
-        [Attributes.PropertyAttributes.PropertyDescription("Please Enter the instance name")]
-        public string v_InstanceName { get; set; }
 
-        public IEBrowserCreateCommand()
-        {
-            this.CommandName = "IEBrowserCreateCommand";
-            this.SelectionName = "Create Browser";
-            this.v_InstanceName = "default";
-            this.CommandEnabled = true;
-        }
-
-        public override void RunCommand(object sender)
-        {
-            var sendingInstance = (UI.Forms.frmScriptEngine)sender;
-            var newBrowserSession = new SHDocVw.InternetExplorer();
-            newBrowserSession.Visible = true;
-            sendingInstance.appInstances.Add(v_InstanceName, newBrowserSession);
-        }
-
-        public override string GetDisplayValue()
-        {
-            return base.GetDisplayValue() + " [Instance Name: '" + v_InstanceName + "']";
-        }
-    }
-    [Serializable]
-    [Attributes.ClassAttributes.Group("IE Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to find and attach to an existing IE web browser session.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements the 'InternetExplorer' application object from SHDocVw.dll to achieve automation.")]
-    public class IEBrowserFindBrowserCommand : ScriptCommand
-    {
-        [XmlAttribute]
-        [Attributes.PropertyAttributes.PropertyDescription("Please Enter the instance name")]
-        public string v_InstanceName { get; set; }
-        [XmlAttribute]
-        [Attributes.PropertyAttributes.PropertyDescription("Please Select or Enter the Browser Name")]
-        public string v_IEBrowserName { get; set; }
-
-        public IEBrowserFindBrowserCommand()
-        {
-            this.CommandName = "IEBrowserFindBrowserCommand";
-            this.SelectionName = "Find Browser";
-            this.v_InstanceName = "default";
-            this.CommandEnabled = true;
-        }
-
-        public override void RunCommand(object sender)
-        {
-            var sendingInstance = (UI.Forms.frmScriptEngine)sender;
-            bool browserFound = false;
-            var shellWindows = new ShellWindows();
-            foreach (IWebBrowser2 shellWindow in shellWindows)
-            {
-                if ((shellWindow.Document is MSHTML.HTMLDocument) && (shellWindow.Document.Title == v_IEBrowserName))
-                {
-                    sendingInstance.appInstances.Add(v_InstanceName, shellWindow.Application);
-                    browserFound = true;
-                    break;
-                }
-            }
-
-            //try partial match
-            if (!browserFound)
-            {
-                foreach (IWebBrowser2 shellWindow in shellWindows)
-                {
-                    if ((shellWindow.Document is MSHTML.HTMLDocument) && (shellWindow.Document.Title.Contains(v_IEBrowserName)))
-                    {
-                        sendingInstance.appInstances.Add(v_InstanceName, shellWindow.Application);
-                        browserFound = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!browserFound)
-            {
-                throw new Exception("Browser was not found!");
-            }
-        }
-
-        public override string GetDisplayValue()
-        {
-            return base.GetDisplayValue() + " [Browser Name: '" + v_IEBrowserName + "', Instance Name: '" + v_InstanceName + "']";
-        }
-    }
-    [Serializable]
-    [Attributes.ClassAttributes.Group("IE Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to navigate the associated IE web browser to a URL.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements the 'InternetExplorer' application object from SHDocVw.dll to achieve automation.")]
-    public class IEBrowserNavigateCommand : ScriptCommand
-    {
-        [XmlAttribute]
-        [Attributes.PropertyAttributes.PropertyDescription("Please Enter the instance name")]
-        public string v_InstanceName { get; set; }
-        [XmlAttribute]
-        [Attributes.PropertyAttributes.PropertyDescription("Please Enter the URL to navigate to")]
-        [Attributes.PropertyAttributes.PropertyUIHelper(Attributes.PropertyAttributes.PropertyUIHelper.UIAdditionalHelperType.ShowVariableHelper)]
-        public string v_URL { get; set; }
-
-        public IEBrowserNavigateCommand()
-        {
-            this.CommandName = "WebBrowserNavigateCommand";
-            this.SelectionName = "Navigate";
-            this.v_InstanceName = "default";
-            this.CommandEnabled = true;
-        }
-
-        public override void RunCommand(object sender)
-        {
-            object browserObject = null;
-            var sendingInstance = (UI.Forms.frmScriptEngine)sender;
-            if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
-            {
-                var browserInstance = (SHDocVw.InternetExplorer)browserObject;
-                browserInstance.Navigate(v_URL.ConvertToUserVariable(sender));
-                WaitForReadyState(browserInstance);
-            }
-            else
-            {
-                throw new Exception("Session Instance was not found");
-            }
-        }
-
-        public override string GetDisplayValue()
-        {
-            return base.GetDisplayValue() + " [URL: '" + v_URL + "', Instance Name: '" + v_InstanceName + "']";
-        }
-        private void WaitForReadyState(SHDocVw.InternetExplorer ieInstance)
-        {
-            DateTime waitExpires = DateTime.Now.AddSeconds(15);
-
-            do
-
-            {
-                System.Threading.Thread.Sleep(500);
-            }
-
-            while ((ieInstance.ReadyState != SHDocVw.tagREADYSTATE.READYSTATE_COMPLETE) && (waitExpires > DateTime.Now));
-        }
-    }
-    [Serializable]
-    [Attributes.ClassAttributes.Group("IE Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to close the associated IE web browser")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements the 'InternetExplorer' application object from SHDocVw.dll to achieve automation.")]
-    public class IEBrowserCloseCommand : ScriptCommand
-    {
-        [XmlAttribute]
-        [Attributes.PropertyAttributes.PropertyDescription("Please Enter the instance name")]
-        public string v_InstanceName { get; set; }
-
-        public IEBrowserCloseCommand()
-        {
-            this.CommandName = "IEBrowserCloseCommand";
-            this.SelectionName = "Close Browser";
-            this.CommandEnabled = true;
-            this.v_InstanceName = "default";
-        }
-
-        public override void RunCommand(object sender)
-        {
-            object browserObject = null;
-            var sendingInstance = (UI.Forms.frmScriptEngine)sender;
-            if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
-            {
-                var browserInstance = (SHDocVw.InternetExplorer)browserObject;
-                browserInstance.Quit();
-                sendingInstance.appInstances.Remove(v_InstanceName);
-            }
-            else
-            {
-                throw new Exception("Session Instance was not found");
-            }
-        }
-
-        public override string GetDisplayValue()
-        {
-            return base.GetDisplayValue() + " [Instance Name: '" + v_InstanceName + "']";
-        }
-    }
-    [Serializable]
-    [Attributes.ClassAttributes.Group("IE Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to manipulate (get or set) elements within the HTML document of the associated IE web browser.  Features an assisting element capture form")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements the 'InternetExplorer' application object from SHDocVw.dll and MSHTML.dll to achieve automation.")]
-    public class IEBrowserElementCommand : ScriptCommand
-    {
-        [XmlAttribute]
-        [Attributes.PropertyAttributes.PropertyDescription("Please Enter the instance name")]
-        public string v_InstanceName { get; set; }
-        [XmlElement]
-        [Attributes.PropertyAttributes.PropertyDescription("Please enter or capture element search parameters")]
-        public System.Data.DataTable v_WebSearchTable { get; set; }
-        [XmlAttribute]
-        [Attributes.PropertyAttributes.PropertyDescription("Please select an action")]
-        public string v_WebAction { get; set; }
-        [XmlElement]
-        [Attributes.PropertyAttributes.PropertyDescription("Action Parameters")]
-        public System.Data.DataTable v_WebActionParameterTable { get; set; }
-
-        public IEBrowserElementCommand()
-        {
-            this.CommandName = "IEBrowserElementCommand";
-            this.SelectionName = "Element Action";
-            this.CommandEnabled = true;
-            this.v_InstanceName = "default";
-
-            this.v_WebSearchTable = new System.Data.DataTable();
-            this.v_WebSearchTable.TableName = DateTime.Now.ToString("WebSearchParamTable" + DateTime.Now.ToString("MMddyy.hhmmss"));
-            this.v_WebSearchTable.Columns.Add("Enabled");
-            this.v_WebSearchTable.Columns.Add("Property Name");
-            this.v_WebSearchTable.Columns.Add("Property Value");
-
-            this.v_WebActionParameterTable = new System.Data.DataTable();
-            this.v_WebActionParameterTable.TableName = DateTime.Now.ToString("WebActionParamTable" + DateTime.Now.ToString("MMddyy.hhmmss"));
-            this.v_WebActionParameterTable.Columns.Add("Parameter Name");
-            this.v_WebActionParameterTable.Columns.Add("Parameter Value");
-        }
-
-        public override void RunCommand(object sender)
-        {
-            object browserObject = null;
-            var sendingInstance = (UI.Forms.frmScriptEngine)sender;
-
-            if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
-            {
-                var browserInstance = (SHDocVw.InternetExplorer)browserObject;
-
-                DataTable searchTable = Core.Common.Clone<DataTable>(v_WebSearchTable);
-
-                DataColumn matchFoundColumn = new DataColumn();
-                matchFoundColumn.ColumnName = "Match Found";
-                matchFoundColumn.DefaultValue = false;
-                searchTable.Columns.Add(matchFoundColumn);
-
-                var elementSearchProperties = from rws in searchTable.AsEnumerable()
-                                              where rws.Field<string>("Enabled") == "True"
-                                              select rws;
-
-                bool qualifyingElementFound = false;
-
-                foreach (IHTMLElement element in browserInstance.Document.All)
-                {
-                    qualifyingElementFound = FindQualifyingElement(elementSearchProperties, element);
-
-                    if ((qualifyingElementFound) && (v_WebAction == "Invoke Click"))
-                    {
-                        element.click();
-                        WaitForReadyState(browserInstance);
-                        break;
-                    }
-                    else if ((qualifyingElementFound) && (v_WebAction == "Left Click") || (qualifyingElementFound) && (v_WebAction == "Middle Click") || (qualifyingElementFound) && (v_WebAction == "Right Click"))
-                    {
-                        int elementXposition = FindElementXPosition(element);
-                        int elementYposition = FindElementYPosition(element);
-
-                        //inputs need to be validated
-
-                        int userXAdjust = Convert.ToInt32((from rw in v_WebActionParameterTable.AsEnumerable()
-                                                           where rw.Field<string>("Parameter Name") == "X Adjustment"
-                                                           select rw.Field<string>("Parameter Value")).FirstOrDefault());
-
-                        int userYAdjust = Convert.ToInt32((from rw in v_WebActionParameterTable.AsEnumerable()
-                                                           where rw.Field<string>("Parameter Name") == "Y Adjustment"
-                                                           select rw.Field<string>("Parameter Value")).FirstOrDefault());
-
-                        var ieClientLocation = User32Functions.GetWindowPosition(new IntPtr(browserInstance.HWND));
-
-                        SendMouseMoveCommand newMouseMove = new SendMouseMoveCommand();
-                        newMouseMove.v_XMousePosition = (elementXposition + ieClientLocation.left + 10) + userXAdjust; // + 10 gives extra padding
-                        newMouseMove.v_YMousePosition = (elementYposition + ieClientLocation.top + 90) + userYAdjust; // +90 accounts for title bar height
-                        newMouseMove.v_MouseClick = v_WebAction;
-                        newMouseMove.RunCommand(sender);
-
-                        break;
-                    }
-                    else if ((qualifyingElementFound) && (v_WebAction == "Set Attribute"))
-                    {
-                        string attributeName = (from rw in v_WebActionParameterTable.AsEnumerable()
-                                                where rw.Field<string>("Parameter Name") == "Attribute Name"
-                                                select rw.Field<string>("Parameter Value")).FirstOrDefault();
-
-                        string valueToSet = (from rw in v_WebActionParameterTable.AsEnumerable()
-                                             where rw.Field<string>("Parameter Name") == "Value To Set"
-                                             select rw.Field<string>("Parameter Value")).FirstOrDefault();
-
-                        valueToSet = valueToSet.ConvertToUserVariable(sender);
-
-                        element.setAttribute(attributeName, valueToSet);
-                        break;
-                    }
-                    else if ((qualifyingElementFound) && (v_WebAction == "Get Attribute"))
-                    {
-                        string attributeName = (from rw in v_WebActionParameterTable.AsEnumerable()
-                                                where rw.Field<string>("Parameter Name") == "Attribute Name"
-                                                select rw.Field<string>("Parameter Value")).FirstOrDefault();
-
-                        string variableName = (from rw in v_WebActionParameterTable.AsEnumerable()
-                                               where rw.Field<string>("Parameter Name") == "Variable Name"
-                                               select rw.Field<string>("Parameter Value")).FirstOrDefault();
-
-                        string convertedAttribute = Convert.ToString(element.getAttribute(attributeName));
-
-                        convertedAttribute.StoreInUserVariable(sender, variableName);
-
-                        break;
-                    }
-                }
-
-                if (!qualifyingElementFound)
-                {
-                    throw new Exception("Could not find the element!");
-                }
-            }
-            else
-            {
-                throw new Exception("Session Instance was not found");
-            }
-        }
-
-        private bool FindQualifyingElement(EnumerableRowCollection<DataRow> elementSearchProperties, IHTMLElement element)
-        {
-            foreach (DataRow seachCriteria in elementSearchProperties)
-            {
-                string searchPropertyName = seachCriteria.Field<string>("Property Name");
-                string searchPropertyValue = seachCriteria.Field<string>("Property Value");
-                string searchPropertyFound = seachCriteria.Field<string>("Match Found");
-
-                searchPropertyFound = "False";
-
-                if (element.GetType().GetProperty(searchPropertyName) == null)
-                {
-                    return false;
-                }
-
-                int searchValue;
-                if (int.TryParse(searchPropertyValue, out searchValue))
-                {
-                    int elementValue = (int)element.GetType().GetProperty(searchPropertyName).GetValue(element, null);
-                    if (elementValue == searchValue)
-                    {
-                        seachCriteria.SetField<string>("Match Found", "True");
-                    }
-                    else
-                    {
-                        seachCriteria.SetField<string>("Match Found", "False");
-                    }
-                }
-                else
-                {
-                    string elementValue = (string)element.GetType().GetProperty(searchPropertyName).GetValue(element, null);
-                    if ((elementValue != null) && (elementValue == searchPropertyValue))
-                    {
-                        seachCriteria.SetField<string>("Match Found", "True");
-                    }
-                    else
-                    {
-                        seachCriteria.SetField<string>("Match Found", "False");
-                    }
-                }
-            }
-
-            foreach (var seachCriteria in elementSearchProperties)
-            {
-                Console.WriteLine(seachCriteria.Field<string>("Property Value"));
-            }
-
-            return elementSearchProperties.Where(seachCriteria => seachCriteria.Field<string>("Match Found") == "True").Count() == elementSearchProperties.Count();
-        }
-
-        private int FindElementXPosition(MSHTML.IHTMLElement obj)
-        {
-            int curleft = 0;
-            if (obj.offsetParent != null)
-            {
-                while (obj.offsetParent != null)
-                {
-                    curleft += obj.offsetLeft;
-                    obj = obj.offsetParent;
-                }
-            }
-
-            return curleft;
-        }
-
-        public int FindElementYPosition(MSHTML.IHTMLElement obj)
-        {
-            int curtop = 0;
-            if (obj.offsetParent != null)
-            {
-                while (obj.offsetParent != null)
-                {
-                    curtop += obj.offsetTop;
-                    obj = obj.offsetParent;
-                }
-            }
-
-            return curtop;
-        }
-
-        public override string GetDisplayValue()
-        {
-            return base.GetDisplayValue() + " [Action: '" + v_WebAction + "', Instance Name: '" + v_InstanceName + "']";
-        }
-
-        private void WaitForReadyState(SHDocVw.InternetExplorer ieInstance)
-        {
-            DateTime waitExpires = DateTime.Now.AddSeconds(15);
-
-            do
-
-            {
-                System.Threading.Thread.Sleep(500);
-            }
-
-            while ((ieInstance.ReadyState != SHDocVw.tagREADYSTATE.READYSTATE_COMPLETE) && (waitExpires > DateTime.Now));
-        }
-    }
-
-    #endregion Legacy IE Web Commands
-
-    #region Web Selenium
+    #region Web Browser
 
     [Serializable]
     [Attributes.ClassAttributes.Group("Web Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to create a new Selenium web browser session.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements Selenium to achieve automation.")]
+    [Attributes.ClassAttributes.Description("This command allows you to create a new Playwright web browser session.")]
+    [Attributes.ClassAttributes.ImplementationDescription("This command implements Microsoft Playwright to achieve automation.")]
     public class SeleniumBrowserCreateCommand : ScriptCommand
     {
         [XmlAttribute]
@@ -581,19 +153,19 @@ namespace sharpRPA.Core.AutomationCommands
         public override void RunCommand(object sender)
         {
             var sendingInstance = (UI.Forms.frmScriptEngine)sender;
-            var driverPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.Windows.Forms.Application.ExecutablePath), "Resources");
-            OpenQA.Selenium.Chrome.ChromeDriverService driverService = OpenQA.Selenium.Chrome.ChromeDriverService.CreateDefaultService(driverPath);
-            //driverService.HideCommandPromptWindow = true;
-
-            var newSeleniumSession = new OpenQA.Selenium.Chrome.ChromeDriver(driverService, new OpenQA.Selenium.Chrome.ChromeOptions());
+            var newBrowserSession = BrowserSession.LaunchAsync().GetAwaiter().GetResult();
 
             if (sendingInstance.appInstances.ContainsKey(v_InstanceName))
             {
-                //need to figure out how to handle multiple potential session names
+                if (sendingInstance.appInstances[v_InstanceName] is BrowserSession existingSession)
+                {
+                    existingSession.Dispose();
+                }
+
                 sendingInstance.appInstances.Remove(v_InstanceName);
             }
 
-            sendingInstance.appInstances.Add(v_InstanceName, newSeleniumSession);
+            sendingInstance.appInstances.Add(v_InstanceName, newBrowserSession);
         }
 
         public override string GetDisplayValue()
@@ -604,8 +176,8 @@ namespace sharpRPA.Core.AutomationCommands
 
     [Serializable]
     [Attributes.ClassAttributes.Group("Web Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to navigate a Selenium web browser session.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements Selenium to achieve automation.")]
+    [Attributes.ClassAttributes.Description("This command allows you to navigate a Playwright web browser session.")]
+    [Attributes.ClassAttributes.ImplementationDescription("This command implements Microsoft Playwright to achieve automation.")]
     public class SeleniumBrowserNavigateURLCommand : ScriptCommand
     {
         [XmlAttribute]
@@ -630,8 +202,8 @@ namespace sharpRPA.Core.AutomationCommands
             var sendingInstance = (UI.Forms.frmScriptEngine)sender;
             if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
             {
-                var seleniumInstance = (OpenQA.Selenium.Chrome.ChromeDriver)browserObject;
-                seleniumInstance.Navigate().GoToUrl(v_URL.ConvertToUserVariable(sender));
+                var browserInstance = (BrowserSession)browserObject;
+                browserInstance.Page.GotoAsync(v_URL.ConvertToUserVariable(sender)).GetAwaiter().GetResult();
             }
             else
             {
@@ -643,24 +215,12 @@ namespace sharpRPA.Core.AutomationCommands
         {
             return base.GetDisplayValue() + " [URL: '" + v_URL + "', Instance Name: '" + v_InstanceName + "']";
         }
-        private void WaitForReadyState(SHDocVw.InternetExplorer ieInstance)
-        {
-            DateTime waitExpires = DateTime.Now.AddSeconds(15);
-
-            do
-
-            {
-                System.Threading.Thread.Sleep(500);
-            }
-
-            while ((ieInstance.ReadyState != SHDocVw.tagREADYSTATE.READYSTATE_COMPLETE) && (waitExpires > DateTime.Now));
-        }
     }
 
     [Serializable]
     [Attributes.ClassAttributes.Group("Web Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to navigate forward a Selenium web browser session.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements Selenium to achieve automation.")]
+    [Attributes.ClassAttributes.Description("This command allows you to navigate forward a Playwright web browser session.")]
+    [Attributes.ClassAttributes.ImplementationDescription("This command implements Microsoft Playwright to achieve automation.")]
     public class SeleniumBrowserNavigateForwardCommand : ScriptCommand
     {
         [XmlAttribute]
@@ -669,7 +229,7 @@ namespace sharpRPA.Core.AutomationCommands
 
         public SeleniumBrowserNavigateForwardCommand()
         {
-            this.CommandName = "WebBrowserNavigateCommand";
+            this.CommandName = "SeleniumBrowserNavigateForwardCommand";
             this.SelectionName = "Navigate Forward";
             this.v_InstanceName = "default";
             this.CommandEnabled = true;
@@ -681,8 +241,8 @@ namespace sharpRPA.Core.AutomationCommands
             var sendingInstance = (UI.Forms.frmScriptEngine)sender;
             if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
             {
-                var seleniumInstance = (OpenQA.Selenium.Chrome.ChromeDriver)browserObject;
-                seleniumInstance.Navigate().Forward();
+                var browserInstance = (BrowserSession)browserObject;
+                browserInstance.Page.GoForwardAsync().GetAwaiter().GetResult();
             }
             else
             {
@@ -698,8 +258,8 @@ namespace sharpRPA.Core.AutomationCommands
 
     [Serializable]
     [Attributes.ClassAttributes.Group("Web Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to navigate backwards in a Selenium web browser session.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements Selenium to achieve automation.")]
+    [Attributes.ClassAttributes.Description("This command allows you to navigate backwards in a Playwright web browser session.")]
+    [Attributes.ClassAttributes.ImplementationDescription("This command implements Microsoft Playwright to achieve automation.")]
     public class SeleniumBrowserNavigateBackCommand : ScriptCommand
     {
         [XmlAttribute]
@@ -720,8 +280,8 @@ namespace sharpRPA.Core.AutomationCommands
             var sendingInstance = (UI.Forms.frmScriptEngine)sender;
             if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
             {
-                var seleniumInstance = (OpenQA.Selenium.Chrome.ChromeDriver)browserObject;
-                seleniumInstance.Navigate().Back();
+                var browserInstance = (BrowserSession)browserObject;
+                browserInstance.Page.GoBackAsync().GetAwaiter().GetResult();
             }
             else
             {
@@ -736,8 +296,8 @@ namespace sharpRPA.Core.AutomationCommands
     }
     [Serializable]
     [Attributes.ClassAttributes.Group("Web Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to refresh a Selenium web browser session.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements Selenium to achieve automation.")]
+    [Attributes.ClassAttributes.Description("This command allows you to refresh a Playwright web browser session.")]
+    [Attributes.ClassAttributes.ImplementationDescription("This command implements Microsoft Playwright to achieve automation.")]
     public class SeleniumBrowserRefreshCommand : ScriptCommand
     {
         [XmlAttribute]
@@ -758,8 +318,8 @@ namespace sharpRPA.Core.AutomationCommands
             var sendingInstance = (UI.Forms.frmScriptEngine)sender;
             if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
             {
-                var seleniumInstance = (OpenQA.Selenium.Chrome.ChromeDriver)browserObject;
-                seleniumInstance.Navigate().Refresh();
+                var browserInstance = (BrowserSession)browserObject;
+                browserInstance.Page.ReloadAsync().GetAwaiter().GetResult();
             }
             else
             {
@@ -774,8 +334,8 @@ namespace sharpRPA.Core.AutomationCommands
     }
     [Serializable]
     [Attributes.ClassAttributes.Group("Web Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to close a Selenium web browser session.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements Selenium to achieve automation.")]
+    [Attributes.ClassAttributes.Description("This command allows you to close a Playwright web browser session.")]
+    [Attributes.ClassAttributes.ImplementationDescription("This command implements Microsoft Playwright to achieve automation.")]
     public class SeleniumBrowserCloseCommand : ScriptCommand
     {
         [XmlAttribute]
@@ -796,9 +356,9 @@ namespace sharpRPA.Core.AutomationCommands
             var sendingInstance = (UI.Forms.frmScriptEngine)sender;
             if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
             {
-                var seleniumInstance = (OpenQA.Selenium.Chrome.ChromeDriver)browserObject;
-                seleniumInstance.Quit();
-                seleniumInstance.Dispose();
+                var browserInstance = (BrowserSession)browserObject;
+                browserInstance.CloseAsync().GetAwaiter().GetResult();
+                sendingInstance.appInstances.Remove(v_InstanceName);
             }
             else
             {
@@ -813,8 +373,8 @@ namespace sharpRPA.Core.AutomationCommands
     }
     [Serializable]
     [Attributes.ClassAttributes.Group("Web Browser Commands")]
-    [Attributes.ClassAttributes.Description("This command allows you to close a Selenium web browser session.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command implements Selenium to achieve automation.")]
+    [Attributes.ClassAttributes.Description("This command allows you to manipulate elements within a Playwright web browser session.")]
+    [Attributes.ClassAttributes.ImplementationDescription("This command implements Microsoft Playwright to achieve automation.")]
     public class SeleniumBrowserElementActionCommand : ScriptCommand
     {
         [XmlAttribute]
@@ -847,7 +407,7 @@ namespace sharpRPA.Core.AutomationCommands
         public DataTable v_WebActionParameterTable { get; set; }
         public SeleniumBrowserElementActionCommand()
         {
-            this.CommandName = "SeleniumBrowserCreateCommand";
+            this.CommandName = "SeleniumBrowserElementActionCommand";
             this.SelectionName = "Element Action";
             this.v_InstanceName = "default";
             this.CommandEnabled = true;
@@ -862,195 +422,199 @@ namespace sharpRPA.Core.AutomationCommands
         {
             object browserObject = null;
             var sendingInstance = (UI.Forms.frmScriptEngine)sender;
-            if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
-            {
-                var seleniumInstance = (OpenQA.Selenium.Chrome.ChromeDriver)browserObject;
 
-                OpenQA.Selenium.IWebElement element = null;
-
-                if (v_SeleniumElementAction == "Wait For Element To Exist")
-                {
-                    int timeOut = Convert.ToInt32((from rw in v_WebActionParameterTable.AsEnumerable()
-                                                   where rw.Field<string>("Parameter Name") == "Timeout (Seconds)"
-                                                   select rw.Field<string>("Parameter Value")).FirstOrDefault());
-
-                    var timeToEnd = DateTime.Now.AddSeconds(timeOut);
-
-                    while (timeToEnd >= DateTime.Now)
-                    {
-                        try
-                        {
-                            element = FindElement(seleniumInstance);
-                            break;
-                        }
-                        catch (Exception)
-                        {
-                            sendingInstance.ReportProgress("Element Not Yet Found... " + (timeToEnd - DateTime.Now).Seconds + "s remain");
-                            System.Threading.Thread.Sleep(1000);
-                        }
-                    }
-
-                    if (element == null)
-                    {
-                        throw new Exception("Element Not Found");
-                    }
-
-                    return;
-                }
-                else
-                {
-                    element = FindElement(seleniumInstance);
-                }
-
-                switch (v_SeleniumSearchType)
-                {
-                    case "Find Element By XPath":
-                        element = seleniumInstance.FindElementByXPath(v_SeleniumSearchParameter);
-                        break;
-
-                    case "Find Element By ID":
-                        element = seleniumInstance.FindElementById(v_SeleniumSearchParameter);
-                        break;
-
-                    case "Find Element By Name":
-                        element = seleniumInstance.FindElementByName(v_SeleniumSearchParameter);
-                        break;
-
-                    case "Find Element By Tag Name":
-                        element = seleniumInstance.FindElementByTagName(v_SeleniumSearchParameter);
-                        break;
-
-                    case "Find Element By Class Name":
-                        element = seleniumInstance.FindElementByClassName(v_SeleniumSearchParameter);
-                        break;
-
-                    default:
-                        throw new Exception("Search Type was not found");
-                }
-
-                switch (v_SeleniumElementAction)
-                {
-                    case "Invoke Click":
-                        element.Click();
-                        break;
-
-                    case "Left Click":
-                    case "Right Click":
-                    case "Middle Click":
-
-                        int userXAdjust = Convert.ToInt32((from rw in v_WebActionParameterTable.AsEnumerable()
-                                                           where rw.Field<string>("Parameter Name") == "X Adjustment"
-                                                           select rw.Field<string>("Parameter Value")).FirstOrDefault());
-
-                        int userYAdjust = Convert.ToInt32((from rw in v_WebActionParameterTable.AsEnumerable()
-                                                           where rw.Field<string>("Parameter Name") == "Y Adjustment"
-                                                           select rw.Field<string>("Parameter Value")).FirstOrDefault());
-
-                        var elementLocation = element.Location;
-                        SendMouseMoveCommand newMouseMove = new SendMouseMoveCommand();
-                        var seleniumWindowPosition = seleniumInstance.Manage().Window.Position;
-                        newMouseMove.v_XMousePosition = (seleniumWindowPosition.X + elementLocation.X + 30 + userXAdjust); // added 30 for offset
-                        newMouseMove.v_YMousePosition = (seleniumWindowPosition.Y + elementLocation.Y + 130 + userYAdjust); //added 130 for offset
-                        newMouseMove.v_MouseClick = v_SeleniumElementAction;
-                        newMouseMove.RunCommand(sender);
-                        break;
-
-                    case "Set Text":
-
-                        string textToSet = (from rw in v_WebActionParameterTable.AsEnumerable()
-                                            where rw.Field<string>("Parameter Name") == "Text To Set"
-                                            select rw.Field<string>("Parameter Value")).FirstOrDefault();
-
-                        string[] potentialKeyPresses = textToSet.Split('{', '}');
-
-                        Type seleniumKeys = typeof(OpenQA.Selenium.Keys);
-                        System.Reflection.FieldInfo[] fields = seleniumKeys.GetFields(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-
-                        //check if chunked string contains a key press command like {ENTER}
-                        foreach (string chunkedString in potentialKeyPresses)
-                        {
-                            if (chunkedString == "")
-                                continue;
-
-                            if (fields.Any(f => f.Name == chunkedString))
-                            {
-                                string keyPress = (string)fields.Where(f => f.Name == chunkedString).FirstOrDefault().GetValue(null);
-                                seleniumInstance.Keyboard.PressKey(keyPress);
-                            }
-                            else
-                            {
-                                element.SendKeys(chunkedString);
-                            }
-                        }
-
-                        break;
-
-                    case "Get Text":
-                    case "Get Attribute":
-
-                        string variableName = (from rw in v_WebActionParameterTable.AsEnumerable()
-                                               where rw.Field<string>("Parameter Name") == "Variable Name"
-                                               select rw.Field<string>("Parameter Value")).FirstOrDefault();
-
-                        string attributeName = (from rw in v_WebActionParameterTable.AsEnumerable()
-                                                where rw.Field<string>("Parameter Name") == "Attribute Name"
-                                                select rw.Field<string>("Parameter Value")).FirstOrDefault();
-
-                        string elementValue;
-                        if (v_SeleniumElementAction == "Get Text")
-                        {
-                            elementValue = element.Text;
-                        }
-                        else
-                        {
-                            elementValue = element.GetAttribute(attributeName);
-                        }
-
-                        elementValue.StoreInUserVariable(sender, variableName);
-
-                        break;
-
-                    default:
-                        throw new Exception("Element Action was not found");
-                }
-            }
-            else
+            if (!sendingInstance.appInstances.TryGetValue(v_InstanceName, out browserObject))
             {
                 throw new Exception("Session Instance was not found");
             }
-        }
 
-        private OpenQA.Selenium.IWebElement FindElement(OpenQA.Selenium.Chrome.ChromeDriver seleniumInstance)
-        {
-            OpenQA.Selenium.IWebElement element = null;
+            var browserInstance = (BrowserSession)browserObject;
+            var element = browserInstance.FindElement(v_SeleniumSearchType, v_SeleniumSearchParameter);
 
-            switch (v_SeleniumSearchType)
+            if (v_SeleniumElementAction == "Wait For Element To Exist")
             {
-                case "Find Element By XPath":
-                    element = seleniumInstance.FindElementByXPath(v_SeleniumSearchParameter);
+                int timeOut = ParseInt(GetParameterValue("Timeout (Seconds)"), 30);
+                sendingInstance.ReportProgress("Waiting for element to exist...");
+
+                try
+                {
+                    element.WaitForAsync(new LocatorWaitForOptions
+                    {
+                        State = WaitForSelectorState.Attached,
+                        Timeout = timeOut * 1000
+                    }).GetAwaiter().GetResult();
+                }
+                catch (PlaywrightException ex)
+                {
+                    throw new Exception("Element Not Found", ex);
+                }
+
+                return;
+            }
+
+            switch (v_SeleniumElementAction)
+            {
+                case "Invoke Click":
+                    element.ClickAsync().GetAwaiter().GetResult();
                     break;
 
-                case "Find Element By ID":
-                    element = seleniumInstance.FindElementById(v_SeleniumSearchParameter);
+                case "Left Click":
+                case "Right Click":
+                case "Middle Click":
+                    var clickOptions = new LocatorClickOptions
+                    {
+                        Button = v_SeleniumElementAction == "Right Click" ? MouseButton.Right : v_SeleniumElementAction == "Middle Click" ? MouseButton.Middle : MouseButton.Left
+                    };
+
+                    int userXAdjust = ParseInt(GetParameterValue("X Adjustment"), 0);
+                    int userYAdjust = ParseInt(GetParameterValue("Y Adjustment"), 0);
+                    if (userXAdjust != 0 || userYAdjust != 0)
+                    {
+                        clickOptions.Position = new Position { X = userXAdjust, Y = userYAdjust };
+                    }
+
+                    element.ClickAsync(clickOptions).GetAwaiter().GetResult();
                     break;
 
-                case "Find Element By Name":
-                    element = seleniumInstance.FindElementByName(v_SeleniumSearchParameter);
+                case "Set Text":
+                    PressText(element, GetParameterValue("Text To Set"));
                     break;
 
-                case "Find Element By Tag Name":
-                    element = seleniumInstance.FindElementByTagName(v_SeleniumSearchParameter);
-                    break;
+                case "Get Text":
+                case "Get Attribute":
+                    string variableName = GetParameterValue("Variable Name");
+                    string attributeName = GetParameterValue("Attribute Name");
 
-                case "Find Element By Class Name":
-                    element = seleniumInstance.FindElementByClassName(v_SeleniumSearchParameter);
+                    string elementValue;
+                    if (v_SeleniumElementAction == "Get Text")
+                    {
+                        elementValue = element.InnerTextAsync().GetAwaiter().GetResult();
+                    }
+                    else
+                    {
+                        elementValue = element.GetAttributeAsync(attributeName).GetAwaiter().GetResult();
+                    }
+
+                    elementValue.StoreInUserVariable(sender, variableName);
                     break;
 
                 default:
-                    throw new Exception("Search Type was not found");
+                    throw new Exception("Element Action was not found");
+            }
+        }
+
+        private string GetParameterValue(string parameterName)
+        {
+            if (v_WebActionParameterTable == null)
+            {
+                return string.Empty;
             }
 
-            return element;
+            return (from rw in v_WebActionParameterTable.AsEnumerable()
+                    where rw.Field<string>("Parameter Name") == parameterName
+                    select rw.Field<string>("Parameter Value")).FirstOrDefault();
+        }
+
+        private static int ParseInt(string value, int defaultValue)
+        {
+            int result;
+            return int.TryParse(value, out result) ? result : defaultValue;
+        }
+
+        private static void PressText(ILocator element, string textToSet)
+        {
+            if (string.IsNullOrEmpty(textToSet))
+            {
+                return;
+            }
+
+            string[] potentialKeyPresses = textToSet.Split('{', '}');
+
+            foreach (string chunkedString in potentialKeyPresses)
+            {
+                if (chunkedString == "")
+                {
+                    continue;
+                }
+
+                string keyPress = GetPlaywrightKey(chunkedString);
+
+                if (keyPress != null)
+                {
+                    element.PressAsync(keyPress).GetAwaiter().GetResult();
+                }
+                else
+                {
+                    element.PressSequentiallyAsync(chunkedString).GetAwaiter().GetResult();
+                }
+            }
+        }
+
+        private static string GetPlaywrightKey(string keyName)
+        {
+            switch (keyName.ToUpperInvariant())
+            {
+                case "ENTER":
+                case "RETURN":
+                    return "Enter";
+                case "TAB":
+                    return "Tab";
+                case "ESCAPE":
+                case "ESC":
+                    return "Escape";
+                case "BACKSPACE":
+                case "BACK_SPACE":
+                    return "Backspace";
+                case "DELETE":
+                case "DEL":
+                    return "Delete";
+                case "SPACE":
+                    return "Space";
+                case "INSERT":
+                    return "Insert";
+                case "HOME":
+                    return "Home";
+                case "END":
+                    return "End";
+                case "PAGEUP":
+                case "PAGE_UP":
+                    return "PageUp";
+                case "PAGEDOWN":
+                case "PAGE_DOWN":
+                    return "PageDown";
+                case "UP":
+                case "ARROWUP":
+                    return "ArrowUp";
+                case "DOWN":
+                case "ARROWDOWN":
+                    return "ArrowDown";
+                case "LEFT":
+                case "ARROWLEFT":
+                    return "ArrowLeft";
+                case "RIGHT":
+                case "ARROWRIGHT":
+                    return "ArrowRight";
+                case "SHIFT":
+                    return "Shift";
+                case "CONTROL":
+                case "CTRL":
+                    return "Control";
+                case "ALT":
+                    return "Alt";
+                case "META":
+                case "COMMAND":
+                case "WIN":
+                case "WINDOWS":
+                    return "Meta";
+                default:
+                    int functionKey;
+                    if (keyName.Length >= 2 && keyName[0] == 'F' && int.TryParse(keyName.Substring(1), out functionKey) && functionKey >= 1 && functionKey <= 12)
+                    {
+                        return "F" + functionKey;
+                    }
+
+                    return null;
+            }
         }
 
         public override string GetDisplayValue()
@@ -1059,7 +623,7 @@ namespace sharpRPA.Core.AutomationCommands
         }
     }
 
-    #endregion Web Selenium
+    #endregion Web Browser
 
     #region Misc Commands
 
@@ -1165,12 +729,10 @@ namespace sharpRPA.Core.AutomationCommands
             UI.Forms.frmScriptEngine engineForm = (UI.Forms.frmScriptEngine)sender;
            string variableMessage = v_Message.ConvertToUserVariable(sender);
 
-            var result = engineForm.Invoke(new Action(() =>
+            engineForm.Invoke(new Action(() =>
             {
                 engineForm.ShowMessage(variableMessage, "MessageBox Command", UI.Forms.Supplemental.frmDialog.DialogType.OkOnly, v_AutoCloseAfter);
-            }
-
-            ));
+            }));
             //System.Windows.Forms.MessageBox.Show(ConvertToUserVariabledText, "Message Box Command", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Information);
         }
 
@@ -2134,7 +1696,7 @@ namespace sharpRPA.Core.AutomationCommands
             if (sendingInstance.appInstances.TryGetValue(v_InstanceName, out excelObject))
             {
                 Microsoft.Office.Interop.Excel.Application excelInstance = (Microsoft.Office.Interop.Excel.Application)excelObject;
-                Microsoft.Office.Interop.Excel.Worksheet excelSheet = excelInstance.ActiveSheet;
+                Microsoft.Office.Interop.Excel.Worksheet excelSheet = (Microsoft.Office.Interop.Excel.Worksheet)excelInstance.ActiveSheet;
                 excelSheet.Range[v_CellLocation].Select();
             }
         }
@@ -2176,7 +1738,7 @@ namespace sharpRPA.Core.AutomationCommands
                 v_TextToSet = v_TextToSet.ConvertToUserVariable(sender);
 
                 Microsoft.Office.Interop.Excel.Application excelInstance = (Microsoft.Office.Interop.Excel.Application)excelObject;
-                Microsoft.Office.Interop.Excel.Worksheet excelSheet = excelInstance.ActiveSheet;
+                Microsoft.Office.Interop.Excel.Worksheet excelSheet = (Microsoft.Office.Interop.Excel.Worksheet)excelInstance.ActiveSheet;
                 excelSheet.Range[v_ExcelCellAddress].Value = v_TextToSet;
             }
         }
@@ -2218,7 +1780,7 @@ namespace sharpRPA.Core.AutomationCommands
                 v_ExcelCellAddress = v_ExcelCellAddress.ConvertToUserVariable(sender);
 
                 Microsoft.Office.Interop.Excel.Application excelInstance = (Microsoft.Office.Interop.Excel.Application)excelObject;
-                Microsoft.Office.Interop.Excel.Worksheet excelSheet = excelInstance.ActiveSheet;
+                Microsoft.Office.Interop.Excel.Worksheet excelSheet = (Microsoft.Office.Interop.Excel.Worksheet)excelInstance.ActiveSheet;
                 var cellValue = (string)excelSheet.Range[v_ExcelCellAddress].Value;
                 cellValue.StoreInUserVariable(sender, v_userVariableName);
             }
@@ -2591,7 +2153,7 @@ namespace sharpRPA.Core.AutomationCommands
     [Serializable]
     [Attributes.ClassAttributes.Group("Image Commands")]
     [Attributes.ClassAttributes.Description("This command allows you to covert an image file into text for parsing.")]
-    [Attributes.ClassAttributes.ImplementationDescription("This command has a dependency on and implements OneNote OCR to achieve automation.")]
+    [Attributes.ClassAttributes.ImplementationDescription("This command implements the Windows.Media.Ocr engine to achieve automation.")]
     public class OCRCommand : ScriptCommand
     {
         [XmlAttribute]
@@ -2612,19 +2174,34 @@ namespace sharpRPA.Core.AutomationCommands
 
         public override void RunCommand(object sender)
         {
-            var engineForm = (UI.Forms.frmScriptEngine)sender;
+            string filePath = v_FilePath.ConvertToUserVariable(sender);
+            string endResult = RunOcrAsync(filePath).GetAwaiter().GetResult();
 
-            var ocrEngine = new OneNoteOCRDll.OneNoteOCR();
-            var arr = ocrEngine.OcrTexts(v_FilePath.ConvertToUserVariable(engineForm)).ToArray();
-
-            string endResult = "";
-            foreach (var text in arr)
-            {
-                endResult += text.Text;
-            }
-
-            //apply to user variable
             endResult.StoreInUserVariable(sender, v_userVariableName);
+        }
+
+        private static async Task<string> RunOcrAsync(string filePath)
+        {
+            var file = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(filePath));
+
+            using (var stream = await file.OpenAsync(FileAccessMode.Read))
+            {
+                var decoder = await BitmapDecoder.CreateAsync(stream);
+
+                using (var bitmap = await decoder.GetSoftwareBitmapAsync())
+                {
+                    var ocrEngine = OcrEngine.TryCreateFromUserProfileLanguages()
+                        ?? OcrEngine.TryCreateFromLanguage(new Language("en-US"));
+
+                    if (ocrEngine == null)
+                    {
+                        throw new Exception("No OCR language is available on this system.");
+                    }
+
+                    var result = await ocrEngine.RecognizeAsync(bitmap);
+                    return string.Join(Environment.NewLine, result.Lines.Select(line => line.Text));
+                }
+            }
         }
 
         public override string GetDisplayValue()
@@ -2692,17 +2269,12 @@ namespace sharpRPA.Core.AutomationCommands
 
         public override void RunCommand(object sender)
         {
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(v_WebRequestURL);
-            request.Method = "GET";
-            request.UserAgent = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.2 (KHTML, like Gecko) Chrome/15.0.874.121 Safari/535.2";
-            HttpWebResponse response = (HttpWebResponse)request.GetResponse();
-
-            Stream dataStream = response.GetResponseStream();
-            StreamReader reader = new StreamReader(dataStream);
-            string strResponse = reader.ReadToEnd();
-
-            strResponse.StoreInUserVariable(sender, v_userVariableName);
-
+            using (var client = new System.Net.Http.HttpClient())
+            {
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.2 (KHTML, like Gecko) Chrome/15.0.874.121 Safari/535.2");
+                string strResponse = client.GetStringAsync(v_WebRequestURL).GetAwaiter().GetResult();
+                strResponse.StoreInUserVariable(sender, v_userVariableName);
+            }
         }
 
         public override string GetDisplayValue()

@@ -287,14 +287,9 @@ namespace sharpRPA.UI
             uiImages.Add("VariableCommand", sharpRPA.Properties.Resources.function);
             uiImages.Add("RunScriptCommand", sharpRPA.Properties.Resources.script);
             uiImages.Add("CloseWindowCommand", sharpRPA.Properties.Resources.close);
-            uiImages.Add("WebBrowserCreateCommand", sharpRPA.Properties.Resources.createbrowser16);
-            uiImages.Add("WebBrowserNavigateCommand", sharpRPA.Properties.Resources.navigate);
-            uiImages.Add("WebBrowserCloseCommand", sharpRPA.Properties.Resources.closebrowser16);
-            uiImages.Add("WebBrowserElementCommand", sharpRPA.Properties.Resources.element);
             uiImages.Add("SendKeysCommand", sharpRPA.Properties.Resources.computer);
             uiImages.Add("SendMouseMoveCommand", sharpRPA.Properties.Resources.computer);
             uiImages.Add("SetWindowStateCommand", sharpRPA.Properties.Resources.windows);
-            uiImages.Add("WebBrowserFindBrowserCommand", sharpRPA.Properties.Resources.createbrowser16);
             uiImages.Add("BeginLoopCommand", sharpRPA.Properties.Resources.loop);
             uiImages.Add("EndLoopCommand", sharpRPA.Properties.Resources.endloop);
             uiImages.Add("ClipboardGetTextCommand", sharpRPA.Properties.Resources.clipboard);
